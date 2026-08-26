@@ -464,7 +464,10 @@ section('offline · audiom.js is importable from Node (§5.1 debt)');
   check(typeof audiom.uvToEastNorth === 'function', 'and uvToEastNorth');
   check(audiom.AUDIOM_KEY === '', 'a missing VITE_ key reads as "" rather than throwing', JSON.stringify(audiom.AUDIOM_KEY));
   check(
-    audiom.AUDIOM_ORIGIN === 'https://audiom-staging.herokuapp.com',
+    // Repointed 2026-08-13 from audiom-staging.herokuapp.com to production.
+    // Staging still answers HTTP but has been failing to finish its client-side
+    // load; audiom.net completes an OSM load in ~15s and accepts the same key.
+    audiom.AUDIOM_ORIGIN === 'https://www.audiom.net',
     'and AUDIOM_ORIGIN falls back to its documented default',
     audiom.AUDIOM_ORIGIN,
   );

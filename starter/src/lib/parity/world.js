@@ -70,7 +70,10 @@ export async function createParityWorld({
   /** Every `route_to` call and the waypoints it produced. Cleared per turn. */
   const routeLog = [];
 
-  const graph = new Graph(model.graph, { feetsPerInch: model.feets_per_inch ?? 1 });
+  // No `?? 1`: a model without `feets_per_inch` must throw, as it does in MapIO
+  // (`config.py:104`). Defaulting it is a 333x scale error that silently makes
+  // every "am I at X" answer false while everything else still reads correctly.
+  const graph = new Graph(model.graph, { feetsPerInch: model.feets_per_inch });
   const adapter = new MapioWorldAdapter({ graph, model, mapName });
 
   const registry = new ToolRegistry({ schema });
@@ -90,7 +93,10 @@ export async function createParityWorld({
   // session. The runner clears the memo per turn as well: relying on either
   // alone is a silent correctness bug the moment the other changes.
   const [minX, minY, maxX, maxY] = adapter.bbox;
-  const perInch = model.feets_per_inch || 1;
+  // No `|| 1`: the Graph above already throws on a model without
+  // `feets_per_inch`, so this can never be undefined — and a default here
+  // would mis-scale the printed surface if that ever changed.
+  const perInch = model.feets_per_inch;
   const surface = createSurface({
     id: `mapio:${mapName}`,
     label: `${mapName} printed sheet`,

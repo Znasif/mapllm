@@ -95,7 +95,17 @@ export function getDistanceTo(args, ctx, { adapter }) {
       status: STATUS.ERROR,
       tool: NAME,
       error: place ? 'no_position' : 'unresolved_place',
-      message: place ? 'I do not know where your finger is.' : `I could not find "${args.place}".`,
+      // ⚠️ MACHINE-FACING. See the note in `amIAt.js`: this string was
+      // first-person prose and a Gemma 4 E2B run spoke it verbatim as its
+      // answer. NY-L3 is the exact trace — asked for the nearest intersection
+      // to the Empire State Building, the model called
+      // `get_distance_to({place:"Empire State Building", units:"blocks"})`,
+      // which is finger-relative, and republished this message.
+      message: place
+        ? 'no_position: this tool measures from the finger, which is not on the map right now. '
+          + 'Do not repeat this to the user. Answer from the place record itself, or from the '
+          + 'relation between the places named, if the question does not need the finger.'
+        : `I could not find "${args.place}".`,
     };
   }
 

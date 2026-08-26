@@ -50,7 +50,15 @@ export function getDirectionTo(args, ctx, { adapter }) {
       status: STATUS.ERROR,
       tool: NAME,
       error: place ? 'no_position' : 'unresolved_place',
-      message: place ? 'I do not know where your finger is.' : `I could not find "${args.place}".`,
+      // ⚠️ MACHINE-FACING. See the note in `amIAt.js`. NY-L4 is this tool's
+      // trace: "Where is Starbucks relative to the Empire State Building?" is
+      // answerable from two place records with no finger at all, but the model
+      // reached for the finger-relative form and then spoke the error.
+      message: place
+        ? 'no_position: this tool measures from the finger, which is not on the map right now. '
+          + 'Do not repeat this to the user. Answer from the place record itself, or from the '
+          + 'relation between the places named, if the question does not need the finger.'
+        : `I could not find "${args.place}".`,
     };
   }
 

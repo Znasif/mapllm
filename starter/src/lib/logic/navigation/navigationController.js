@@ -37,7 +37,15 @@ export class NavigationController {
    * @param {() => number} [options.now] Clock in seconds, handed to navigators.
    */
   constructor(graph, onAction, options = {}) {
-    const { feetsPerInch = 1, now = undefined } = options;
+    // No `= 1`. Python multiplies `feets_per_inch` into `arrived_threshold` and
+    // `far_threshold` (`navigation_controller.py:22-23`); a silent 1 shrinks
+    // both by the map's scale factor, so "you have arrived" never fires. See
+    // the full note in `graph.js`.
+    const { feetsPerInch, now = undefined } = options;
+
+    if (!Number.isFinite(feetsPerInch) || feetsPerInch <= 0) {
+      throw new Error(`NavigationController: options.feetsPerInch is required and must be positive, got ${feetsPerInch}.`);
+    }
 
     this.graph = graph;
     this.now = now;

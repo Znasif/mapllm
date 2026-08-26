@@ -98,6 +98,23 @@ export default function App() {
     cornerFractionsRef,
   });
 
+  // Corner fractions shrink the full-device bbox down to just the pin area.
+  //
+  // brailledoodle_corners.json stores the four calibrated corners as PIXEL
+  // coordinates in braille.png — its own key is the path to that file — so they
+  // only become fractions once divided by THAT image's natural dimensions.
+  //
+  // ⚠️ The divisor is deliberately NOT `selectedMap.templateUrl`. Dividing
+  // braille.png's pixels by a MapIO template's dimensions silently rescales the
+  // grid by the ratio between two unrelated images, and non-uniformly, so the
+  // ASPECT RATIO changes too. Measured with new_york/template.png (1920x1824
+  // against braille.png's 1271x909): the artwork area went from 0.786 x 0.789
+  // of the sheet at aspect 0.996 to 0.520 x 0.393 at aspect 1.324, shifted hard
+  // toward the top-left. The mask fill is derived from the same bbox, so the
+  // transparency moves with it and the whole grid "looks different".
+  //
+  // Per-map calibration is a real need, but it needs a corners file PER
+  // template. Until one exists, only the physical braille sheet is calibrated.
   useEffect(() => {
     let cancelled = false;
 
@@ -107,7 +124,7 @@ export default function App() {
         const img = new Image();
         img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
         img.onerror = () => resolve(null);
-        img.src = selectedMap?.templateUrl ? asset(selectedMap.templateUrl) : asset('braille.png');
+        img.src = asset('braille.png');
       }),
     ])
       .then(([cornersData, dims]) => {
@@ -123,10 +140,10 @@ export default function App() {
           bottom: Math.max(bl[1], br[1]) / dims.h,
         };
       })
-      .catch(() => { /* uncalibrated fallback */ });
+      .catch(() => { /* uncalibrated: usePinGrid falls back to the full bbox */ });
 
     return () => { cancelled = true; };
-  }, [selectedMap]);
+  }, []);
 
   useEffect(() => {
     syncPointMarker(mapRef.current, placeMarkerRef, point, 'place');

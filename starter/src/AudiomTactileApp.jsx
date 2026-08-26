@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  parseEmbedId, parseMapId, parseAudiomView, parseAudiomSources,
+  parseAudiomId, parseAudiomView, parseAudiomSources,
   subWindow, mercAspect, zoomForBbox, bboxSpanMeters, PREDEFINED_SOURCES,
 } from './audiom';
 import { AudiomMap } from './AudiomMap';
@@ -24,7 +24,6 @@ function SliderField({ label, min, max, step, value, onChange }) {
 export default function AudiomTactileApp() {
   const [sourceInput, setSourceInput] = useState('/maps/d/885');
   const [sources, setSources] = useState('');
-  const [embedId, setEmbedId] = useState('');
   const [mapId, setMapId] = useState('');
   const [error, setError] = useState('');
 
@@ -103,13 +102,12 @@ export default function AudiomTactileApp() {
   function load() {
     const raw = String(sourceInput || '').trim();
     if (!raw) { setError('Enter a map link, an embed id, a source, or a GeoJSON URL.'); return; }
-    setSources(''); setEmbedId(''); setMapId('');
+    setSources(''); setMapId('');
     setFullBbox(null); setCenter(null); setFraction(1); setError('');
 
-    const mid = parseMapId(raw);
+    // One id namespace since the `/d/` route was removed — see audiom.js.
+    const mid = parseAudiomId(raw);
     if (mid) { setMapId(mid); return; }
-    const eid = parseEmbedId(raw);
-    if (eid) { setEmbedId(eid); return; }
     const fromUrl = parseAudiomSources(raw);
     const v = parseAudiomView(raw);
     if (v.centerLng != null) setCenter({ lng: v.centerLng, lat: v.centerLat });
@@ -128,7 +126,7 @@ export default function AudiomTactileApp() {
     setCenter({ lng: center.lng + dx * (e - w) * 0.5, lat: center.lat + dy * (n - s) * 0.5 });
   };
 
-  const loaded = sources || embedId || mapId;
+  const loaded = sources || mapId;
 
   return (
     <div className="app-shell">
@@ -171,9 +169,8 @@ export default function AudiomTactileApp() {
             ))}
           </div>
           <button type="button" className="primary-button" onClick={load}>Load</button>
-          {mapId ? <p className="point-meta">map id {mapId} · /embed/d/{mapId}</p> : null}
-          {embedId ? <p className="point-meta">embed id {embedId}</p> : null}
-          {!mapId && !embedId && sources ? <p className="point-meta">source: {sources}</p> : null}
+          {mapId ? <p className="point-meta">map id {mapId} · /embed/{mapId}</p> : null}
+          {!mapId && sources ? <p className="point-meta">source: {sources}</p> : null}
           {error ? <p className="error-text">{error}</p> : null}
         </section>
 
@@ -337,7 +334,7 @@ export default function AudiomTactileApp() {
           <>
             <AudiomMap
               fill
-              embedId={embedId} mapId={mapId} sources={sources}
+              mapId={mapId} sources={sources}
               view={view} bbox={bbox} coordRef={fingerRef}
               onStart={handleStart} onBounds={handleBounds}
               syncView={syncView} syncKey={syncKey}

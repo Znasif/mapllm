@@ -13,7 +13,7 @@ function metersBetween(a, b) {
 }
 
 /**
- * Audiom embed (any map: /embed/d/<id>, /embed/<id>, or a dynamic source),
+ * Audiom embed (any map: /embed/<id> or a dynamic source),
  * with the avatar driven by the tactile fingertip via the PostMessage API.
  *
  * The embed is loaded ONCE and never reloaded on scale changes — there is no
@@ -23,7 +23,8 @@ function metersBetween(a, b) {
  * do want the display to match the current window.
  *
  * Props:
- *  - embedId / mapId / sources : what to load (see audiom.js).
+ *  - mapId / sources : what to load (see audiom.js). The old embedId/mapId
+ *    split went away with the `/d/` route; one id now covers both.
  *  - view      : { centerLng, centerLat, zoom, width, height } — only used for
  *                the initial src and the iframe box.
  *  - bbox      : the current tactile window; sizes the movement deadband.
@@ -50,7 +51,7 @@ function metersBetween(a, b) {
  * `scripts/test_audiom_channel.mjs`. This component is a consumer.
  */
 export function AudiomMap({
-  embedId, mapId, sources, view, bbox, coordRef,
+  mapId, sources, view, bbox, coordRef,
   throttleMs = 500, stepMeters = 0, onEvent, onStart, onBounds,
   syncKey = 0, syncView = false, fill = false,
   featureRef, onChannel,
@@ -146,11 +147,10 @@ export function AudiomMap({
       ? { center: { lng: view.centerLng, lat: view.centerLat }, zoom: view.zoom }
       : {};
     if (mapId) return buildEmbedSrc({ mapId, ...viewArgs });
-    if (embedId) return buildEmbedSrc({ embedId, ...viewArgs });
     if (sources) return buildEmbedSrc({ sources, ...viewArgs });
     return '';
     // syncKey is in the deps so "Sync view" can force a reload.
-  }, [mapId, embedId, sources, syncView, view, syncKey]);
+  }, [mapId, sources, syncView, view, syncKey]);
 
   // Deadband: emit only after the finger crosses a meaningful ground distance.
   // Derived from the ACTUAL tactile window (not a default view), so it scales
@@ -325,6 +325,28 @@ export function AudiomMap({
         src={src}
         allow="autoplay; fullscreen"
         allowFullScreen
+        /*
+         * ⚠️ REQUIRED, and the page is blank without it.
+         *
+         * `resources/coi-serviceworker.js` puts this page under
+         * `Cross-Origin-Embedder-Policy: credentialless` so `SharedArrayBuffer`
+         * exists and wllama can run multithreaded. Under COEP a cross-origin
+         * iframe is blocked unless the EMBEDDED document also sends COEP — and
+         * Audiom sends neither COEP nor CORP (verified by HEAD 2026-08-13 on
+         * both audiom.net and the staging dyno). Chrome reports the block as
+         * "www.audiom.net refused to connect", which reads like a network or
+         * URL fault and is neither.
+         *
+         * `credentialless` is the opt-out COEP: credentialless provides: the
+         * frame loads in a credentialless context (no cookies or storage for
+         * audiom.net) and is not required to send COEP itself. Safe here
+         * because the embed authenticates with `apiKey` in the query string,
+         * not with cookies.
+         *
+         * Removing this trades Audiom for multithreaded wllama — they cannot
+         * both work without it.
+         */
+        credentialless=""
         className="audiom-frame"
         style={fill ? undefined : { width: view?.width, height: view?.height }}
       />

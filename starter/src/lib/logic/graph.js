@@ -159,19 +159,63 @@ export class Graph {
    *   `points_of_interest`, `reference_system`, `latlng_reference`.
    * @param {object} [options]
    * @param {RouteCallback} [options.onRoute] Where routing results are delivered.
-   * @param {number} [options.feetsPerInch=1] `config.feets_per_inch` for this map.
+   * @param {number} options.feetsPerInch `config.feets_per_inch` for this map.
+   *   **REQUIRED.** See the note below.
    * @param {boolean} [options.llmEnabled=true] When false every POI starts
    *   enabled, matching `load_pois`'s `if not config.llm_enabled`.
    * @param {(start: Coords, destination: Coords, routeIndex: number) => Leg[]} [options.legsProvider]
    *   Alternative source of route legs (the seam where `__google_legs` lived).
+   *
+   * ⚠️ **`feetsPerInch` is REQUIRED and must throw when absent. Do not restore a
+   * default.** This parameter had a silent `= 1` default, which was a PORTING
+   * ARTEFACT with no counterpart in MapIO: `config.py:104` reads
+   * `model["feets_per_inch"]` with square brackets, so a model missing the key
+   * raises `KeyError` at load and the program never starts.
+   *
+   * The default converted that crash into a plausible-looking wrong answer.
+   * `AM_I_THRESHOLD` is 0.75 **inches**; multiplied by a real scale it becomes
+   * 250 ft on `new_york`, and by a defaulted 1 it stays 0.75 ft — a 333x error.
+   * Streets still resolve and descriptions still read correctly, so nothing
+   * looks broken; but a finger 200 ft from a POI, comfortably "at" it, reports
+   * no place, and every `am_i_at` answer is silently false.
+   *
+   * The blast radius is wider than this class, and the same defect was found in
+   * two already-ported modules — it was never hypothetical:
+   *
+   *   - `positionHandler.js` — `map_margin`, `points_gravity`
+   *     (`position_handler.py:24,34`). Fixed the same day; also required
+   *     `feetsPerPixel`.
+   *   - `navigation/navigationController.js` — `arrived_threshold`,
+   *     `far_threshold` (`navigation_controller.py:22-23`). Fixed the same day.
+   *     A defaulted scale there shrinks both thresholds by the map's scale
+   *     factor, so "you have arrived" never fires.
+   *
+   * Still unported and carrying the same risk when it lands:
+   * `movement_threshold` (`gesture_recognizer.py:232`).
+   *
+   * When adding any module that scales by `feets_per_inch` or `feets_per_pixel`,
+   * require it. Sweep for regressions with:
+   *   grep -rn "feets_per_inch *|| *1\|feetsPerInch = 1\|feetsPerPixel = 1" src/
+   *
+   * Callers must pass the model's value directly — never `?? 1` or `|| 1`, which
+   * reintroduces exactly this bug at the call site.
    */
   constructor(graphDict, options = {}) {
     const {
       onRoute = onRoutePlaceholder,
-      feetsPerInch = 1,
+      feetsPerInch,
       llmEnabled = true,
       legsProvider = undefined,
     } = options;
+
+    if (!Number.isFinite(feetsPerInch) || feetsPerInch <= 0) {
+      throw new Error(
+        `Graph: options.feetsPerInch is required and must be a positive number, got ${feetsPerInch}. ` +
+          "It is the model's `feets_per_inch`. Python fails loudly on a model missing it " +
+          '(config.py:104 uses model["feets_per_inch"]); this matches that. ' +
+          'Do NOT pass `?? 1` to silence this — a wrong scale makes every "am I at X" answer false.',
+      );
+    }
 
     this.feetsPerInch = feetsPerInch;
     this.amIThreshold = Graph.AM_I_THRESHOLD * feetsPerInch;

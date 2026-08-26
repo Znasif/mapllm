@@ -178,7 +178,19 @@ export class PositionHandler {
    * @param {() => number} [options.now] Clock in seconds.
    */
   constructor(graph, options = {}) {
-    const { feetsPerInch = 1, feetsPerPixel = 1, now = () => Date.now() / 1000 } = options;
+    // No `= 1` on the scales. Python multiplies `feets_per_inch` into
+    // `map_margin` and `points_gravity` (`position_handler.py:24,34`) and
+    // `feets_per_pixel` into the pixel conversion; a silent 1 is a scale error
+    // that leaves positions plausible but wrong. `graph.js` carries the full
+    // note. Every caller passes real values today — keep it that way.
+    const { feetsPerInch, feetsPerPixel, now = () => Date.now() / 1000 } = options;
+
+    if (!Number.isFinite(feetsPerInch) || feetsPerInch <= 0) {
+      throw new Error(`PositionHandler: options.feetsPerInch is required and must be positive, got ${feetsPerInch}.`);
+    }
+    if (!Number.isFinite(feetsPerPixel) || feetsPerPixel <= 0) {
+      throw new Error(`PositionHandler: options.feetsPerPixel is required and must be positive, got ${feetsPerPixel}.`);
+    }
 
     this.graph = graph;
     this.feetsPerPixel = feetsPerPixel;

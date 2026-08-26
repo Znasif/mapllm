@@ -41,7 +41,11 @@ export const AUDIOM_ORIGIN = (() => {
   const explicit = envValue(() => import.meta.env.VITE_AUDIOM_ORIGIN);
   if (explicit) return explicit.replace(/\/$/, '');
   try { return new URL(EMBED_URL).origin; } catch { /* noop */ }
-  return 'https://audiom-staging.herokuapp.com';
+  // Production, not staging. Verified 2026-08-13: both hosts answer in <0.6s and
+  // both accept the same full-access key, but staging is a dyno that has been
+  // failing to finish its client-side load, while audiom.net completes an OSM
+  // load in ~15s.
+  return 'https://www.audiom.net';
 })();
 // Prefer the full-access key: it resolves pre-configured embeds (e.g. /embed/570,
 // the human skeleton). The standard key only works for dynamic `sources`.
@@ -50,29 +54,35 @@ export const AUDIOM_KEY =
   envValue(() => import.meta.env.VITE_AUDIOM_KEY);
 
 // ---- 1. parse a map id from a pasted Audiom URL or bare id ----
-// Accepts "885", ".../maps/d/885", ".../embed/885", ".../map/885" (+ query/hash).
+//
+// ⚠️ THE `/d/` ROUTE IS GONE. Verified by HTTP 2026-08-13 on BOTH hosts:
+//
+//     /maps/885      200        /maps/d/885    404
+//     /embed/885     200        /embed/d/885   404
+//
+// This module used to carry three parsers and a two-namespace model: a
+// "pre-configured embed id" at `/embed/<id>` versus a "map-editor id" at
+// `/maps/d/<id>`, which embedded through `/embed/d/<id>`. That distinction no
+// longer exists in the URL, so the three collapse into one. `buildEmbedSrc`
+// lost its `embedId` branch with them.
+//
+// Accepted, all resolving to the same id:
+//   "885"                                          bare
+//   .../maps/885            .../embed/885          numeric
+//   .../maps/wisconsin-...-2-885                   slug + trailing id
+//   .../embed/wisconsin-...-2-885
+//   .../map/885                                    older viewer path
+//   .../maps/d/885          .../embed/d/885        LEGACY, dead server-side,
+//                                                  still parsed so an old
+//                                                  bookmark degrades to a
+//                                                  working embed
 export function parseAudiomId(input) {
   const s = String(input || '').trim();
   if (/^\d+$/.test(s)) return s;
-  const m = s.match(/\/(?:maps\/d|embed|map)\/(\d+)/);
-  return m ? m[1] : null;
-}
-
-// A pre-configured EMBED id: a bare number or an `/embed/<id>` URL. This is a
-// DIFFERENT namespace from the map-editor id in `/maps/d/<id>` — e.g. the human
-// skeleton's embed id is 570, which is not its editor id.
-export function parseEmbedId(input) {
-  const s = String(input || '').trim();
-  if (/^\d+$/.test(s)) return s;
-  const m = s.match(/\/embed\/(\d+)(?:[/?#]|$)/); // /embed/<id> but NOT /embed/d/<id>
-  return m ? m[1] : null;
-}
-
-// A map-EDITOR map id, from `/maps/d/<id>` or `/embed/d/<id>`. These embed via
-// the `/embed/d/<id>` route (verified: /embed/d/885 loads the Wisconsin map).
-export function parseMapId(input) {
-  const s = String(input || '').trim();
-  const m = s.match(/\/(?:maps|embed)\/d\/(\d+)/);
+  // The id is the trailing number: a slug like `...-quaternary-map-2-885` has
+  // digits inside it, so anchor on the end of the path segment, not the first
+  // number found.
+  const m = s.match(/\/(?:maps|embed|map)\/(?:d\/)?(?:[A-Za-z0-9-]*?-)?(\d+)(?:[/?#]|$)/);
   return m ? m[1] : null;
 }
 
@@ -99,27 +109,40 @@ export const PREDEFINED_SOURCES = [
 ];
 
 // ---- 2. build the embed src ----
-// IMPORTANT (verified against staging): the embed loads DATA from `sources`, not
-// from a saved-map id. `/embed/885` sends no sources -> "Map not ready" forever.
-// So we drive `/embed/dynamic` with an explicit source: a predefined id above or
-// a direct GeoJSON URL. `center`+`zoom` pin the view to the printed material.
-export function buildEmbedSrc({ embedId, mapId, sources, center, zoom } = {}) {
+//
+// ⚠️ UNVERIFIED IN A BROWSER, AND THE PRIOR FINDING SAID THE OPPOSITE.
+//
+// This block used to read: "IMPORTANT (verified against staging): the embed
+// loads DATA from `sources`, not from a saved-map id. `/embed/885` sends no
+// sources -> 'Map not ready' forever." That was measured against the OLD
+// staging deployment, when a saved map embedded through `/embed/d/<id>`.
+//
+// `/embed/d/<id>` now 404s on both hosts, so `/embed/<id>` is the ONLY route a
+// saved map has. Either the backend changed to serve a saved map's data on that
+// route, or saved maps still need `sources` and the id alone will hang on
+// "Map not ready" exactly as before. HTTP alone cannot tell these apart: with a
+// key, `/embed/885` returns 200 and a clean `pageProps` — whether the map DATA
+// then arrives is client-side and needs a real browser.
+//
+// If it hangs, the fallback is unchanged: drive `/embed/dynamic` with an
+// explicit source (a `PREDEFINED_SOURCES` id or a direct GeoJSON URL).
+// `center`+`zoom` pin the view to the printed material.
+export function buildEmbedSrc({ mapId, sources, center, zoom } = {}) {
   const p = new URLSearchParams();
   if (AUDIOM_KEY) p.set('apiKey', AUDIOM_KEY);
   p.set('allowedOrigins', window.location.origin); // required to enable postMessage
   p.set('showVisualMap', 'true');
   p.set('showHeading', 'false');
-  // A pre-configured embed (/embed/<id>) or a saved map-editor map (/embed/d/<id>)
-  // carries its own data + view, so we don't pass sources/center/zoom. A dynamic
-  // source needs them.
-  if (!embedId && !mapId) {
+  // A saved map (/embed/<id>) carries its own data + view, so we don't pass
+  // sources/center/zoom. A dynamic source needs them.
+  if (!mapId) {
     if (sources) p.set('sources', sources);
     if (center && Number.isFinite(center.lng) && Number.isFinite(center.lat)) {
       p.set('center', `${center.lng.toFixed(6)},${center.lat.toFixed(6)}`);
     }
     if (zoom != null && Number.isFinite(zoom)) p.set('zoom', Number(zoom).toFixed(3));
   }
-  const path = mapId ? `/embed/d/${mapId}` : embedId ? `/embed/${embedId}` : '/embed/dynamic';
+  const path = mapId ? `/embed/${mapId}` : '/embed/dynamic';
   return `${AUDIOM_ORIGIN}${path}?${p.toString()}`;
 }
 

@@ -195,6 +195,23 @@ export function AudiomAvatar({
         src={src}
         allow="autoplay; fullscreen"
         allowFullScreen
+        /*
+         * ⚠️ REQUIRED. `resources/coi-serviceworker.js` puts this page under
+         * `Cross-Origin-Embedder-Policy: credentialless` so `SharedArrayBuffer`
+         * exists for wllama. Under COEP a cross-origin iframe is blocked unless
+         * the EMBEDDED document also sends COEP, and Audiom sends neither COEP
+         * nor CORP (verified by HEAD on both hosts 2026-08-13). Chrome words the
+         * block as "www.audiom.net refused to connect", which reads like a
+         * network fault and is not one.
+         *
+         * Proven side by side: under COEP a plain iframe of audiom.net shows the
+         * broken-frame icon while a `credentialless` one loads. Safe here — the
+         * embed authenticates with `apiKey` in the query string, not cookies.
+         *
+         * `AudiomMap.jsx` carries the same attribute. THIS is the component
+         * `App.jsx` renders; AudiomMap is used by `AudiomTactileApp.jsx`.
+         */
+        credentialless=""
         className="audiom-frame"
         style={{ width: view.width, height: view.height }}
       />

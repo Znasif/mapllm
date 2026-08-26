@@ -35,7 +35,20 @@ export function amIAt(args, ctx, { adapter }) {
       status: STATUS.ERROR,
       tool: NAME,
       error: place ? 'no_position' : 'unresolved_place',
-      message: place ? 'I do not know where your finger is.' : `I could not find "${args.place}".`,
+      // ⚠️ `no_position` is MACHINE-FACING on purpose. It used to read "I do not
+      // know where your finger is." — first-person prose in the assistant's own
+      // voice — and on 2026-08-13 a Gemma 4 E2B parity run republished it
+      // verbatim as the final answer on 3 of 17 turns (NY-S4, NY-L3, NY-L4).
+      // The model had asked a finger-relative tool a landmark-relative question,
+      // got a fluent sentence back, and stopped. An error a model can mistake
+      // for a finished answer will be spoken as one — so say what to do instead.
+      // `unresolved_place` keeps its wording: that path produced a good answer
+      // on NY-N1 ("I do not see a Walmart in the places currently in view").
+      message: place
+        ? 'no_position: this tool measures from the finger, which is not on the map right now. '
+          + 'Do not repeat this to the user. Answer from the place record itself, or from the '
+          + 'relation between the places named, if the question does not need the finger.'
+        : `I could not find "${args.place}".`,
     };
   }
 

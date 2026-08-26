@@ -282,7 +282,11 @@ export function useMapioDispatcher({
         if (!isCurrent) return;
 
         const graphDict = data.graph || data;
-        const graph = new Graph(graphDict, { feetsPerInch: data.feets_per_inch || 1 });
+        // A model without feets_per_inch must throw, as it does in MapIO
+        // (config.py:104, KeyError on missing "feets_per_inch"). `|| 1`
+        // silently reintroduces a 333x scale error (AM_I_THRESHOLD is 0.75
+        // inches; at scale 1 it stays 0.75 ft instead of ~250 ft).
+        const graph = new Graph(graphDict, { feetsPerInch: data.feets_per_inch });
         const adapter = new MapioWorldAdapter({ graph, model: data, mapName: selectedMap.id });
 
         const registry = new ToolRegistry({ schema });
