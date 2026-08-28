@@ -242,7 +242,6 @@ export default function App() {
             bbox={pinBbox}
             mapRef={mapRef}
             mapLoadedRef={mapLoadedRef}
-            templateUrl={asset(selectedMap.templateUrl)}
             pinGridRef={pinGridRawRef}
             onCoord={(coord) => { fingerCoordRef.current = coord; }}
             groundTruthProbe={groundTruthProbe}

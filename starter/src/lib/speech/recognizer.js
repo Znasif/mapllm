@@ -250,6 +250,110 @@ export function buildPhrases(phrases, boost, Phrase) {
 /* -------------------------------------------------------------- recognizer -- */
 
 /**
+ * Is there an on-device speech pack, without building a recogniser?
+ *
+ * `createRecognizer()`'s own `probe()` is a closure, and the caller that needs
+ * this most is a *different page* — the one deciding whether Explore may be
+ * entered at all. Building a whole recogniser to ask one question would also
+ * mean asking for a microphone on a settings screen.
+ *
+ * No microphone, no gesture, no audio. Safe to call at mount.
+ *
+ * @param {{lang?: string}} [options]
+ * @returns {Promise<string>} An {@link Availability} value.
+ */
+export async function probeOnDeviceStt({ lang = 'en-US' } = {}) {
+  const Ctor =
+    (typeof globalThis !== 'undefined' && (globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition)) ||
+    null;
+
+  if (!Ctor) return Availability.UNAVAILABLE;
+  // An engine with no `available()` static cannot promise on-device anything.
+  // UNKNOWN, not AVAILABLE: the caller must not read "no answer" as "yes".
+  if (typeof Ctor.available !== 'function') return Availability.UNKNOWN;
+
+  try {
+    const result = await Ctor.available({ langs: [lang], processLocally: true });
+    const value = String(result ?? '');
+    return Object.values(Availability).includes(value) ? value : Availability.UNKNOWN;
+  } catch {
+    return Availability.UNKNOWN;
+  }
+}
+
+/**
+ * Will speech recognition still work with the network off?
+ *
+ * **Only `AVAILABLE` counts.** The three near-misses each fail offline for their
+ * own reason, and treating any of them as good enough is how a user ends up
+ * mid-session with a dead microphone:
+ *
+ *   - `DOWNLOADABLE` — a pack exists but is not installed, and installing it
+ *     needs the network. Offline it never arrives.
+ *   - `DOWNLOADING` — in flight. Pulling the plug leaves it incomplete.
+ *   - `UNKNOWN` — the engine has no `available()`, so it is almost certainly
+ *     sending audio to a server. That is exactly the case that "worked for a
+ *     while and then stopped when the network went": it was cloud all along, and
+ *     nothing announced it.
+ *
+ * @param {{lang?: string}} [options]
+ * @returns {Promise<boolean>}
+ */
+export async function isSttOfflineCapable(options = {}) {
+  return (await probeOnDeviceStt(options)) === Availability.AVAILABLE;
+}
+
+/**
+ * Can the on-device pack be installed from this page, right now?
+ *
+ * Distinguishes "not installed" from "not installable". The two look identical
+ * to a user staring at a disabled button and feel very different: one is a
+ * download away, the other means this browser will never do it.
+ *
+ * @param {string} availability An {@link Availability} value.
+ * @returns {boolean}
+ */
+export function canInstallOnDeviceStt(availability) {
+  const Ctor =
+    (typeof globalThis !== 'undefined' && (globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition)) ||
+    null;
+  return (
+    typeof Ctor?.install === 'function' &&
+    (availability === Availability.DOWNLOADABLE || availability === Availability.DOWNLOADING)
+  );
+}
+
+/**
+ * Download the on-device speech pack.
+ *
+ * ⚠️ **Must be called from inside a user gesture.** Chrome gates the download on
+ * transient activation, as it does any user-visible fetch of that size, so
+ * calling this from a page-load probe silently fails.
+ *
+ * Standalone twin of `createRecognizer()`'s `install()`, for the page that has
+ * to decide whether Explore may be entered at all — see `probeOnDeviceStt`.
+ *
+ * @param {{lang?: string}} [options]
+ * @returns {Promise<string>} The {@link Availability} value *after* the attempt,
+ *   so the caller re-reads the truth rather than trusting the return of a
+ *   download it did not watch.
+ */
+export async function installOnDeviceStt({ lang = 'en-US' } = {}) {
+  const Ctor =
+    (typeof globalThis !== 'undefined' && (globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition)) ||
+    null;
+  if (typeof Ctor?.install !== 'function') return probeOnDeviceStt({ lang });
+
+  try {
+    await Ctor.install({ langs: [lang], processLocally: true });
+  } catch {
+    // Fall through: a failed install and a refused install are the same to the
+    // caller, and the re-probe below is what actually decides.
+  }
+  return probeOnDeviceStt({ lang });
+}
+
+/**
  * @param {object} [options]
  * @param {Function} [options.SpeechRecognition] Defaults to
  *   `globalThis.SpeechRecognition ?? globalThis.webkitSpeechRecognition`,
@@ -617,6 +721,7 @@ export function createRecognizer(options = {}) {
    */
   function wire(instance, token) {
     const live = () => !disposed && token === session;
+    let deliveredFinalsCount = 0;
 
     instance.onstart = () => { if (live()) setState(RecognizerState.LISTENING); };
 
@@ -627,10 +732,51 @@ export function createRecognizer(options = {}) {
 
     instance.onresult = (event) => {
       if (!live()) return;
-      const result = readResult(event);
-      if (!result) return;
-      handlers.onResult?.(result);
-      if (result.isFinal) handlers.onFinal?.(result.transcript);
+      const results = event?.results;
+      if (!results || typeof results.length !== 'number') {
+        const result = readResult(event);
+        if (!result) return;
+        handlers.onResult?.(result);
+        if (result.isFinal) handlers.onFinal?.(result.transcript);
+        return;
+      }
+
+      // 1. Deliver any newly finalized segments that have not been delivered yet
+      for (let i = deliveredFinalsCount; i < results.length; i += 1) {
+        const item = results[i];
+        if (!item || !item.isFinal || typeof item.length !== 'number' || item.length === 0) {
+          break;
+        }
+        const best = item[0];
+        if (best && typeof best.transcript === 'string') {
+          const transcript = best.transcript.trim();
+          if (transcript) {
+            const confidence = typeof best.confidence === 'number' ? best.confidence : 0;
+            const alternatives = [];
+            for (let a = 1; a < item.length; a += 1) {
+              if (item[a]?.transcript) alternatives.push(item[a].transcript.trim());
+            }
+            handlers.onResult?.({ transcript, isFinal: true, confidence, alternatives });
+            handlers.onFinal?.(transcript);
+          }
+        }
+        deliveredFinalsCount = i + 1;
+      }
+
+      // 2. Deliver the current interim segment (unfinalized items from deliveredFinalsCount onwards)
+      let interimTranscript = '';
+      for (let i = deliveredFinalsCount; i < results.length; i += 1) {
+        const item = results[i];
+        if (!item || item.isFinal || typeof item.length !== 'number' || item.length === 0) continue;
+        const best = item[0];
+        if (best && typeof best.transcript === 'string') {
+          interimTranscript += (interimTranscript ? ' ' : '') + best.transcript.trim();
+        }
+      }
+      interimTranscript = interimTranscript.trim();
+      if (interimTranscript) {
+        handlers.onResult?.({ transcript: interimTranscript, isFinal: false, confidence: 0, alternatives: [] });
+      }
     };
 
     instance.onerror = (event) => {

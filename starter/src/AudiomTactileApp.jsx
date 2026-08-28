@@ -4,6 +4,7 @@ import {
   subWindow, mercAspect, zoomForBbox, bboxSpanMeters, PREDEFINED_SOURCES,
 } from './audiom';
 import { AudiomMap } from './AudiomMap';
+import { AudiomProbePanel } from './AudiomProbePanel';
 import { TactileExplorerGeneric } from './TactileExplorerGeneric';
 import asset from './lib/assetUrl';
 
@@ -22,7 +23,7 @@ function SliderField({ label, min, max, step, value, onChange }) {
 }
 
 export default function AudiomTactileApp() {
-  const [sourceInput, setSourceInput] = useState('/maps/d/885');
+  const [sourceInput, setSourceInput] = useState('/maps/885');
   const [sources, setSources] = useState('');
   const [mapId, setMapId] = useState('');
   const [error, setError] = useState('');
@@ -42,6 +43,10 @@ export default function AudiomTactileApp() {
   const [overlayOpacity, setOverlayOpacity] = useState(0.55);
   const [overlayPct, setOverlayPct] = useState(60);
   const [showRectPanel, setShowRectPanel] = useState(false);
+  // Bounds-probe diagnostic. Purely observational: `probe` is never read by the
+  // window model, and turning the panel off changes nothing but the rendering.
+  const [showProbePanel, setShowProbePanel] = useState(false);
+  const [probe, setProbe] = useState(null);
 
   const fingerRef = useRef(null);
 
@@ -99,11 +104,15 @@ export default function AudiomTactileApp() {
     setCenter({ lng: (bb[0] + bb[2]) / 2, lat: (bb[1] + bb[3]) / 2 });
   }, []);
 
+  // Stable identity: `AudiomMap` lists its callbacks in the discovery effect's
+  // deps, so an inline arrow here would re-run the probe on every render.
+  const handleProbe = useCallback((telemetry) => { setProbe(telemetry); }, []);
+
   function load() {
     const raw = String(sourceInput || '').trim();
     if (!raw) { setError('Enter a map link, an embed id, a source, or a GeoJSON URL.'); return; }
     setSources(''); setMapId('');
-    setFullBbox(null); setCenter(null); setFraction(1); setError('');
+    setFullBbox(null); setCenter(null); setFraction(1); setError(''); setProbe(null);
 
     // One id namespace since the `/d/` route was removed — see audiom.js.
     const mid = parseAudiomId(raw);
@@ -116,7 +125,7 @@ export default function AudiomTactileApp() {
 
   const pick = (s) => {
     setSourceInput(s); setSources(s);
-    setEmbedId(''); setMapId(''); setFullBbox(null); setCenter(null); setFraction(1); setError('');
+    setEmbedId(''); setMapId(''); setFullBbox(null); setCenter(null); setFraction(1); setError(''); setProbe(null);
   };
 
   // Pan by half a window, clamped inside the map by subWindow().
@@ -150,7 +159,7 @@ export default function AudiomTactileApp() {
           <div className="geocoder">
             <input
               className="geocoder-input"
-              placeholder="/maps/d/885 · 570 · osm · https://…/data.geojson"
+              placeholder="/maps/885 · 570 · osm · https://…/data.geojson"
               value={sourceInput}
               onChange={(e) => setSourceInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
@@ -222,6 +231,27 @@ export default function AudiomTactileApp() {
           ) : (
             <p className="subtle">
               {loaded ? 'Discovering map bounds… (~20 s, avatar probes the edges)' : 'Load a map first.'}
+            </p>
+          )}
+        </section>
+
+        <section className="panel-section">
+          <h2>Bounds probe (diagnostic)</h2>
+          <p className="subtle">
+            Discovery runs four independent 1-D searches from ONE seed — the avatar's
+            start position. That measures a cross-section through the seed, not a
+            bounding box, so a seed far from the map's centre skews the bounds and
+            therefore the printed aspect. This draws the probe so you can see it.
+            It changes nothing.
+          </p>
+          <label className="switch-row">
+            <input type="checkbox" checked={showProbePanel}
+              onChange={(e) => setShowProbePanel(e.target.checked)} />
+            <span>Show bounds-probe visualizer</span>
+          </label>
+          {showProbePanel && !probe && (
+            <p className="point-meta">
+              {loaded ? 'Waiting for bounds discovery to finish…' : 'Load a map first.'}
             </p>
           )}
         </section>
@@ -336,7 +366,7 @@ export default function AudiomTactileApp() {
               fill
               mapId={mapId} sources={sources}
               view={view} bbox={bbox} coordRef={fingerRef}
-              onStart={handleStart} onBounds={handleBounds}
+              onStart={handleStart} onBounds={handleBounds} onProbe={handleProbe}
               syncView={syncView} syncKey={syncKey}
             />
             <TactileExplorerGeneric
@@ -346,12 +376,13 @@ export default function AudiomTactileApp() {
               showRectPanel={showRectPanel}
               onCoord={(c) => { fingerRef.current = c; }}
             />
+            {showProbePanel && <AudiomProbePanel telemetry={probe} />}
           </>
         ) : (
           <div className="map-placeholder">
             <div>
               <h2>Load a map to begin</h2>
-              <p>Try <code>/maps/d/885</code>, <code>570</code>, or <code>osm</code>.</p>
+              <p>Try <code>/maps/885</code>, <code>570</code>, or <code>osm</code>.</p>
             </div>
           </div>
         )}

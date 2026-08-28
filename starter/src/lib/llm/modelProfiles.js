@@ -138,9 +138,52 @@ export const SWA_FULL_NOTE = 'default ON — measured 2026-08-12, 42–50× on d
  */
 export const DEFAULT_N_CTX = 8192;
 
+/**
+ * How many layers to hand to the WebGPU backend. 99999 = all of them.
+ *
+ * ⚠️ This was briefly defaulted to 0 (CPU) after a first turn aborted twice on
+ * an NVIDIA Ampere card:
+ *
+ *     srv update_slots: no tokens to decode                       (x4)
+ *     server-context.cpp:3275: fatal error - please provide logs and repro
+ *     ggml-webgpu.cpp:457: ggml_webgpu: Queue work failed with status 64
+ *
+ * That default was WRONG, and it is recorded here so it does not get re-applied.
+ * The starter app was then run on the SAME machine, SAME browser, with its
+ * camera, MediaPipe hand tracking (GPU delegate), OpenCV per-frame loop and TWO
+ * wllama instances all live, at n_gpu_layers 99999 — and it answered normally.
+ * So neither the WebGPU backend nor contention for the GPU is what aborts here.
+ *
+ * Note the ORDER in that log: the llama.cpp server assert fires FIRST, and the
+ * WebGPU queue failure only comes after the module is already dead. The backend
+ * was the aftermath, not the cause. Look at the request instead — an empty
+ * prompt reaching a slot produces exactly "no tokens to decode".
+ *
+ * Setting this constant to 0 forces the multi-threaded CPU build if a machine
+ * genuinely needs it. Prefill there is far slower — a several-thousand-token
+ * prompt can take minutes — so do not reach for it to "rule out the GPU"
+ * without expecting that wait. Edit the value here; there is deliberately no
+ * environment override, because a number that changes with an unversioned local
+ * file is a number nobody can reproduce a report against.
+ */
+export const DEFAULT_N_GPU_LAYERS = 99999;
+
+export const isMobileDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+};
+
+export const getOptimalGpuLayers = () => {
+  return DEFAULT_N_GPU_LAYERS;
+};
+
 /** Shared chat-tier load params. Profiles override `n_ctx`/urls, not these. */
 const CHAT_LOAD = {
   n_ctx: DEFAULT_N_CTX,
+  n_batch: 256,
+  n_ubatch: 64,
+  flash_attn: true,
+  n_threads: typeof navigator !== 'undefined' && navigator.hardwareConcurrency ? Math.min(6, navigator.hardwareConcurrency) : 4,
   n_cache_reuse: N_CACHE_REUSE,
   // The jinja path is what carries tool-call rendering and `enable_thinking`.
   // Without it wllama falls back to a legacy formatter and the tools vanish.
@@ -151,7 +194,8 @@ const CHAT_LOAD = {
   // (`createChatCompletion` spreads defaults first), so this covers the turns
   // `LocalLLMClient` does not mark — narration rounds with no `tools` array.
   default_template_kwargs: { enable_thinking: false },
-  n_gpu_layers: 99999,
+  // Full WebGPU offload on desktop, multi-threaded CPU WASM on mobile to prevent 30s WebGPU queue aborts.
+  n_gpu_layers: getOptimalGpuLayers(),
   // Keeps a warm slot rather than tearing the context down between turns. THIS
   // is what carries prefix reuse for append-only history — see N_CACHE_REUSE.
   cache_idle_slots: true,
@@ -159,6 +203,18 @@ const CHAT_LOAD = {
   // in a stable head can still be reused. Measured, not assumed — SWA_FULL_NOTE
   // carries the paired numbers.
   swa_full: true,
+  // ⚠️ Explicit, because context shift is named in the reports behind
+  // llama.cpp PR #20277 — the kill switch that aborts the server after N
+  // consecutive EMPTY batches and prints
+  //
+  //     srv update_slots: no tokens to decode        (once per empty batch)
+  //     server-context.cpp: fatal error - please provide logs and repro ...
+  //
+  // Shifting is what the server reaches for when a prompt will not fit, and the
+  // empty-batch loop is reported from that path. Off means an over-long prompt
+  // fails as an over-long prompt instead of spinning into an abort that names
+  // neither the prompt nor the context.
+  ctx_shift: false,
 };
 
 const EMBED_LOAD = {
@@ -169,7 +225,8 @@ const EMBED_LOAD = {
   // EmbeddingGemma is a mean-pooled sentence encoder. Getting this wrong does
   // not error — it silently returns last-token vectors and ranking degrades.
   pooling_type: 'mean',
-  n_gpu_layers: 99999,
+  n_gpu_layers: getOptimalGpuLayers(),
+  n_threads: typeof navigator !== 'undefined' && navigator.hardwareConcurrency ? Math.min(6, navigator.hardwareConcurrency) : 4,
 };
 
 /**
@@ -231,12 +288,11 @@ export const PROFILES = {
    * Origin `https://znasif.github.io`: 302 -> 200 on every shard, byte counts
    * exact, `access-control-allow-origin: *` on the CDN, `accept-ranges: bytes`.
    *
-   * ⚠️ Which makes the `hf` fallback below a TRAP for this tier: it is the
-   * unsplit 2.62 GB file, i.e. precisely the failure above. It is kept only
-   * because `resolveModelSource` needs some source when `VITE_MODEL_URL` is
-   * empty, and because the E4B profile shares this shape. **If the chat tier
-   * ever reaches `hf`, the tab is already lost** — that is a misconfiguration,
-   * not a graceful degradation.
+   * ⚠️ A note here once called the `hf` fallback a TRAP for this tier, on the
+   * grounds that it was the unsplit 2.62 GB file — i.e. precisely the failure
+   * above. That was true of an earlier value and is NOT true now: `hf` below is
+   * the same five-shard repo as `url`. Reaching it is the ordinary outcome on
+   * any machine without the spike folder, not a misconfiguration.
    *
    * **The `hf` path below had no subfolder, and a 404 looks like a broken
    * model.** `UD-Q4_K_XL/<file>.gguf` returns `404 EntryNotFound` — the GGUF
@@ -265,8 +321,8 @@ export const PROFILES = {
     label: 'Gemma 4 E2B (QAT, UD-Q4_K_XL)',
     url: '/models/e2b-q4-00001-of-00005.gguf',
     hf: {
-      repo: 'unsloth/gemma-4-E2B-it-qat-GGUF',
-      filePath: 'gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf',
+      repo: 'znasif/gemma-4-E2B-it-qat-Q4_K_XL-split',
+      filePath: 'e2b-q4-00001-of-00005.gguf',
     },
     weightsBytes: 2_620_370_976,
     /**

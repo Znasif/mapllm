@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import cv from '@techstark/opencv-js';
 import { openCameraStream } from './cameraDevices';
 import { createPointingTracker, pointingHint } from './gestureRecognizer';
-import asset from './lib/assetUrl';
+import { speak } from './lib/speak';
+import { createCornerCapture, CORNER_PROMPTS } from './lib/cornerRegistration';
 
 const MEDIAPIPE_WASM =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
@@ -37,51 +38,88 @@ function makeOneEuroFilter(minCutoff = 1.0, beta = 0.007, dCutoff = 1.0) {
   };
 }
 
+// ---- accessibility cues ----
+// `speak` lives in lib/speak.js — same cancel-then-speak behaviour shared with
+// the Audiom build. The M-S announcement queue replaces it.
+let _ac;
+const beep = () => {
+  try {
+    _ac = _ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = _ac.createOscillator(), g = _ac.createGain();
+    o.frequency.value = 880; o.connect(g); g.connect(_ac.destination);
+    g.gain.setValueAtTime(0.2, _ac.currentTime); o.start();
+    g.gain.exponentialRampToValueAtTime(0.001, _ac.currentTime + 0.15); o.stop(_ac.currentTime + 0.16);
+  } catch { /* noop */ }
+};
+
 /**
- * Warps the camera's view of the physical braille.png back onto the digital
- * map using continuous ORB template matching (handles perspective + movement).
+ * Warps the camera's view of the physical material back onto the digital map
+ * using continuous AKAZE matching (handles perspective + movement).
  *
- * Pipeline each frame:
+ * Register the material once by pointing at its four corners (MediaPipe +
+ * dwell — see lib/cornerRegistration.js); the frame captured at the fourth
+ * corner becomes the AKAZE reference, and those four points become the artwork
+ * rectangle. Each frame afterwards:
+ *
  *   camera frame
- *     → Hinv (ORB homography, camera → template)
- *     → H_tpl_to_scr (map.project bbox corners → screen)
- *   Composed H_cam_to_scr = H_tpl_to_scr × Hinv
+ *     → Hfwd (AKAZE homography, snapshot → camera)
+ *     → the four touched corners, projected into the live camera
+ *   Composed H_cam_to_scr = (camera corners → map bbox corners on screen)
  *     → cv.warpPerspective → overlay canvas (alpha=0 outside map boundary)
  *
- * Template note: currently uses full braille.png for ORB keypoints.
- * Future: mask to outer border strip only so inner road changes don't
- * affect detection stability.
+ * NO TEMPLATE IMAGE. This used to match against braille.png plus a calibration
+ * file of its corners, which tied the OSM path to one printed sheet and made
+ * every other material silently misaligned. The registered corners ARE the
+ * artwork now, so any printed map works and nothing needs calibrating.
  */
 const DEVICE_ROWS = 31;
 const DEVICE_COLS = 43;
+
+// Pin positions in unit (u,v) space, row-major. The four touched corners bound
+// the artwork exactly, so the grid inside them is uniform — no per-material
+// interpolation table, and nothing to load. Built once: it never changes.
+const PIN_UV = (() => {
+  const arr = new Float32Array(DEVICE_ROWS * DEVICE_COLS * 2);
+  for (let row = 0; row < DEVICE_ROWS; row++) {
+    const v = row / (DEVICE_ROWS - 1);
+    for (let col = 0; col < DEVICE_COLS; col++) {
+      const idx = (row * DEVICE_COLS + col) * 2;
+      arr[idx]     = col / (DEVICE_COLS - 1);
+      arr[idx + 1] = v;
+    }
+  }
+  return arr;
+})();
 
 export function TactileExplorer({
   bbox,
   mapRef,
   mapLoadedRef,
-  templateUrl = asset('braille.png'),
   pinGridRef,
   onCoord,
   groundTruthProbe,
 }) {
   const videoRef   = useRef(null);
-  const offRef     = useRef(document.createElement('canvas')); // clean frame for ORB
-  const tplPinPosRef  = useRef(null); // Float32Array of template-space (x,y) for each pin, row-major
-  const tplCornersRef = useRef(null); // [[x,y]×4] calibrated corners in template pixels (TL,TR,BR,BL)
+  const offRef     = useRef(document.createElement('canvas')); // clean frame for AKAZE
   const overlayRef = useRef(null);
   const debugRef   = useRef(null);
   const runningRef = useRef(false);
+
+  const phaseRef   = useRef('idle');   // 'idle' | 'capturing' | 'ready'
+  // Dwell state machine: [[x,y]TL,TR,BR,BL] in snapshot px, plus the hold
+  // timing. Shared with the Audiom build (lib/cornerRegistration.js) and
+  // checked headlessly by scripts/test_cornerRegistration.mjs.
+  const captureRef = useRef(createCornerCapture());
 
   const s = useRef({
     hl: null,         // HandLandmarker
     sift: null,
     bf: null,
-    kpTpl: null,
+    kpTpl: null,      // features of the captured snapshot
     descTpl: null,
-    tplW: 0,
-    tplH: 0,
-    Hfwd: null,       // template → camera frame
-    Hinv: null,       // camera frame → template
+    Hfwd: null,       // snapshot → camera frame
+    Hinv: null,       // camera frame → snapshot
+    HsnapToUv: null,  // snapshot px → unit (u,v) inside the touched corners
     Hcs:  null,       // camera frame → screen (reused by finger dot each frame)
     bestInliers: 0,
     bestInliersAt: 0,  // performance.now() of last improvement
@@ -99,6 +137,7 @@ export function TactileExplorer({
   const [gestureHint, setGestureHint] = useState(null);
   const [coord, setCoord]     = useState(null);
   const [debugInfo, setDebugInfo] = useState({ good: 0, inliers: 0 });
+  const [phase, setPhase]     = useState('idle');
   const [isFixed, setIsFixed] = useState(false);
   const isFixedRef = useRef(false);
 
@@ -111,7 +150,20 @@ export function TactileExplorer({
     }
   };
 
-  // Keyboard mapping: Semicolon (;), F8, or Alt+H (avoids Audiom & screen reader conflicts)
+  const startCapture = () => {
+    captureRef.current.reset();
+    s.current.HsnapToUv?.delete(); s.current.HsnapToUv = null;
+    s.current.Hfwd?.delete(); s.current.Hinv?.delete(); s.current.Hcs?.delete();
+    s.current.Hfwd = s.current.Hinv = s.current.Hcs = null;
+    s.current.bestInliers = 0;
+    isFixedRef.current = false; setIsFixed(false);
+    phaseRef.current = 'capturing'; setPhase('capturing');
+    setStatus('Registering material');
+    speak(`Point at the ${CORNER_PROMPTS[0]} corner and hold.`);
+  };
+
+  // Keyboard mapping: Semicolon (;), F8, or Alt+H toggle Fix (avoids Audiom &
+  // screen reader conflicts); 'r' re-registers the material.
   useEffect(() => {
     function handleKeyDown(e) {
       if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
@@ -123,39 +175,54 @@ export function TactileExplorer({
         e.preventDefault();
         toggleFixed();
       }
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        startCapture();
+      }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Load calibrated corner positions from brailledoodle_corners.json and
-  // precompute template-space (x, y) for every pin via bilinear interpolation.
-  useEffect(() => {
-    fetch(asset('brailledoodle_corners.json'))
-      .then((r) => r.json())
-      .then((data) => {
-        const corners = Object.values(data)[0];
-        if (!corners || corners.length < 4) return;
-        tplCornersRef.current = corners; // store raw [TL,TR,BR,BL] pixel coords
-        const [tl, tr, br, bl] = corners;
-        const arr = new Float32Array(DEVICE_ROWS * DEVICE_COLS * 2);
-        for (let row = 0; row < DEVICE_ROWS; row++) {
-          const v = row / (DEVICE_ROWS - 1);
-          for (let col = 0; col < DEVICE_COLS; col++) {
-            const u = col / (DEVICE_COLS - 1);
-            const idx = (row * DEVICE_COLS + col) * 2;
-            arr[idx]     = (1-u)*(1-v)*tl[0] + u*(1-v)*tr[0] + u*v*br[0] + (1-u)*v*bl[0];
-            arr[idx + 1] = (1-u)*(1-v)*tl[1] + u*(1-v)*tr[1] + u*v*br[1] + (1-u)*v*bl[1];
-          }
-        }
-        tplPinPosRef.current = arr;
-      })
-      .catch(() => {});
-  }, []);
-
   useEffect(() => {
     const st = s.current;
     let cancelled = false;
+
+    // The current frame becomes the AKAZE reference, and the four points the
+    // user just touched become the artwork rectangle within it.
+    function captureReference() {
+      const off = offRef.current;
+      const snap = cv.imread(off);
+      const gray = new cv.Mat();
+      cv.cvtColor(snap, gray, cv.COLOR_RGBA2GRAY); snap.delete();
+      st.kpTpl?.delete(); st.descTpl?.delete();
+      st.kpTpl = new cv.KeyPointVector();
+      st.descTpl = new cv.Mat();
+      const noMask = new cv.Mat();
+      st.sift.detectAndCompute(gray, noMask, st.kpTpl, st.descTpl);
+      noMask.delete(); gray.delete();
+
+      const c = captureRef.current.corners;
+      const srcPx = cv.matFromArray(4, 1, cv.CV_32FC2,
+        [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]]);
+      const dstUv = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1, 0, 1, 1, 0, 1]);
+      st.HsnapToUv?.delete();
+      st.HsnapToUv = cv.getPerspectiveTransform(srcPx, dstUv);
+      srcPx.delete(); dstUv.delete();
+
+      // The snapshot IS the current frame, so snapshot->camera is the identity
+      // right now. Seed it so tracking works the instant registration finishes,
+      // rather than waiting for AKAZE to score 8+ inliers — which may never
+      // happen on a feature-poor material, leaving the tool apparently dead.
+      // NB: built with matFromArray, not cv.Mat.eye — that returns a MatExpr,
+      // whose support in OpenCV.js is partial and can throw when handed to
+      // perspectiveTransform (which would kill the render loop mid-registration).
+      const I = () => cv.matFromArray(3, 3, cv.CV_64F, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+      st.Hfwd?.delete(); st.Hinv?.delete();
+      st.Hfwd = I();
+      st.Hinv = I();
+      st.bestInliers = 0; st.bestInliersAt = 0;
+    }
 
     async function init() {
       setStatus('Loading hand model…');
@@ -174,52 +241,9 @@ export function TactileExplorer({
       await waitForOpenCV();
       if (cancelled) return;
 
-      setStatus('Extracting template features…');
-      const img = await new Promise((res, rej) => {
-        const el = new Image();
-        el.onload  = () => res(el);
-        el.onerror = () => rej(new Error(`Cannot load template: ${templateUrl}`));
-        el.src = templateUrl;
-      });
-      const tplCanvas = Object.assign(document.createElement('canvas'), {
-        width: img.naturalWidth, height: img.naturalHeight,
-      });
-      tplCanvas.getContext('2d').drawImage(img, 0, 0);
-      st.tplW = img.naturalWidth;
-      st.tplH = img.naturalHeight;
-
-      const tplMat  = cv.imread(tplCanvas);
-      const tplGray = new cv.Mat();
-      cv.cvtColor(tplMat, tplGray, cv.COLOR_RGBA2GRAY);
-      tplMat.delete();
-
-      // AKAZE restricted to a border-only mask: the dot grid interior is a
-      // periodic texture that produces phantom homographies shifted by N grid
-      // spacings. Only the outer border strip (corners, clips, text) has unique
-      // features that can anchor a correct homography.
-      st.sift  = new cv.AKAZE();
-      st.kpTpl = new cv.KeyPointVector();
-      st.descTpl = new cv.Mat();
-
-      const borderMask = new cv.Mat(st.tplH, st.tplW, cv.CV_8UC1, new cv.Scalar(0));
-      const bw = Math.round(st.tplW * 0.12); // 12% strip on each side
-      const bh = Math.round(st.tplH * 0.12);
-      // Top strip
-      borderMask.roi(new cv.Rect(0, 0, st.tplW, bh)).setTo(new cv.Scalar(255));
-      // Bottom strip
-      borderMask.roi(new cv.Rect(0, st.tplH - bh, st.tplW, bh)).setTo(new cv.Scalar(255));
-      // Left strip (full height to fill corners)
-      borderMask.roi(new cv.Rect(0, 0, bw, st.tplH)).setTo(new cv.Scalar(255));
-      // Right strip
-      borderMask.roi(new cv.Rect(st.tplW - bw, 0, bw, st.tplH)).setTo(new cv.Scalar(255));
-
-      st.sift.detectAndCompute(tplGray, borderMask, st.kpTpl, st.descTpl);
-      borderMask.delete();
-      tplGray.delete();
-
+      st.sift = new cv.AKAZE();
       // HAMMING norm for AKAZE binary descriptors; crossCheck=false needed for knnMatch
       st.bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
-      if (cancelled) return;
 
       // Camera choice is Chrome's — its permission prompt lists every input
       // with a preview. facingMode is applied on mobile only so the desktop
@@ -231,7 +255,7 @@ export function TactileExplorer({
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
 
-      setStatus('Searching for map…');
+      setStatus('Ready — press “Register material”.');
       runningRef.current = true;
       requestAnimationFrame(loop);
     }
@@ -246,7 +270,7 @@ export function TactileExplorer({
       const vh = video.videoHeight;
       if (!vw || !vh) { requestAnimationFrame(loop); return; }
 
-      // Capture clean frame to offscreen canvas — ORB reads from here.
+      // Capture clean frame to offscreen canvas — AKAZE reads from here.
       const off = offRef.current;
       off.width = vw;
       off.height = vh;
@@ -258,7 +282,8 @@ export function TactileExplorer({
 
       // Require an actual pointing gesture, as camio-explorer does. Taking
       // landmarks[0][8] unconditionally meant a flat palm, a fist, or a hand
-      // resting on the material all produced a confident cursor.
+      // resting on the material all produced a confident cursor — and during
+      // corner capture could lock a dwell that was never a point.
       st.pointTracker ??= createPointingTracker();
       const gesture = st.pointTracker.update(result, now);
 
@@ -282,9 +307,28 @@ export function TactileExplorer({
         setGestureHint(hint);
       }
 
+      // ── Corner capture ─────────────────────────────────────────────
+      if (phaseRef.current === 'capturing') {
+        const cap = captureRef.current.update(fx, fy, now);
+        if (cap.locked) {
+          beep();
+          if (cap.complete) {
+            captureReference();
+            phaseRef.current = 'ready'; setPhase('ready');
+            setStatus('Tracking');
+            speak('Map registered. Move your finger on the map.');
+          } else {
+            speak(`Point at the ${cap.nextPrompt} corner and hold.`);
+          }
+        }
+        drawDebug(fx, fy);
+        requestAnimationFrame(loop);
+        return;
+      }
+
       // ── AKAZE + homography (every 6 frames) ────────────────────────
       st.tick++;
-      if (!isFixedRef.current && st.tick % 6 === 0 && st.descTpl?.rows > 0) {
+      if (phaseRef.current === 'ready' && !isFixedRef.current && st.tick % 6 === 0 && st.descTpl?.rows > 0) {
         const frameMat  = cv.imread(off);
         const frameGray = new cv.Mat();
         cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY);
@@ -346,21 +390,25 @@ export function TactileExplorer({
       const screenW = overlay.parentElement?.clientWidth  ?? 800;
       const screenH = overlay.parentElement?.clientHeight ?? 600;
 
-      if (st.Hfwd && !st.Hfwd.empty() && map && mapLoadedRef?.current && bb) {
+      const touched = captureRef.current.corners;
+      const registered = phaseRef.current === 'ready' && touched.length >= 4;
+
+      if (registered && st.Hfwd && !st.Hfwd.empty() && map && mapLoadedRef?.current && bb) {
         const [minLng, minLat, maxLng, maxLat] = bb;
         const tl = map.project([minLng, maxLat]);
         const tr = map.project([maxLng, maxLat]);
         const br = map.project([maxLng, minLat]);
         const bl = map.project([minLng, minLat]);
 
-        const tc = tplCornersRef.current;
-        const tcArr = tc
-          ? [tc[0][0], tc[0][1], tc[1][0], tc[1][1], tc[2][0], tc[2][1], tc[3][0], tc[3][1]]
-          : [0, 0, st.tplW, 0, st.tplW, st.tplH, 0, st.tplH];
+        // The four corners the user touched, in snapshot px. snapshot → camera
+        // is Hfwd, exactly as template → camera used to be, so the composition
+        // below is unchanged — only where the four points come from.
+        const c = touched;
+        const tcArr = [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]];
         const scrArr = [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y];
 
-        // Project tc corners through Hfwd → their positions in the camera frame,
-        // then warp directly from camera to screen in one pass.
+        // Project the touched corners through Hfwd → their positions in the
+        // camera frame, then warp directly from camera to screen in one pass.
         const tplPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, tcArr);
         const camPtsMat = new cv.Mat();
         cv.perspectiveTransform(tplPtsMat, camPtsMat, st.Hfwd);
@@ -382,21 +430,20 @@ export function TactileExplorer({
         cv.imshow(overlay, warped);
         warped.delete();
 
-        // Draw pin dots — project calibrated template positions through
-        // H_tpl_to_scr (tc corners → screen) so dots align with physical holes.
-        const tplPinPos = tplPinPosRef.current;
-        const pinGrid   = pinGridRef?.current;
-        if (tplPinPos && pinGrid) {
-          const tplPtsMat2 = cv.matFromArray(4, 1, cv.CV_32FC2, tcArr);
+        // Draw pin dots — the touched corners ARE the artwork rectangle, so the
+        // pin grid is uniform in (u,v) and maps straight onto the bbox quad.
+        const pinGrid = pinGridRef?.current;
+        if (pinGrid) {
+          const uvPtsMat  = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1, 0, 1, 1, 0, 1]);
           const scrPtsMat2 = cv.matFromArray(4, 1, cv.CV_32FC2, scrArr);
-          const H_tpl_to_scr = cv.getPerspectiveTransform(tplPtsMat2, scrPtsMat2);
-          tplPtsMat2.delete(); scrPtsMat2.delete();
+          const H_uv_to_scr = cv.getPerspectiveTransform(uvPtsMat, scrPtsMat2);
+          uvPtsMat.delete(); scrPtsMat2.delete();
 
           const n      = DEVICE_ROWS * DEVICE_COLS;
-          const srcMat = cv.matFromArray(n, 1, cv.CV_32FC2, tplPinPos);
+          const srcMat = cv.matFromArray(n, 1, cv.CV_32FC2, PIN_UV);
           const dstMat = new cv.Mat();
-          cv.perspectiveTransform(srcMat, dstMat, H_tpl_to_scr);
-          srcMat.delete(); H_tpl_to_scr.delete();
+          cv.perspectiveTransform(srcMat, dstMat, H_uv_to_scr);
+          srcMat.delete(); H_uv_to_scr.delete();
 
           const ctx = overlay.getContext('2d');
           for (let i = 0; i < n; i++) {
@@ -412,13 +459,14 @@ export function TactileExplorer({
           dstMat.delete();
         }
       } else {
-        // No homography yet — clear overlay
+        // Not registered, or no homography yet — clear overlay
         overlay.width  = screenW;
         overlay.height = screenH;
         overlay.getContext('2d').clearRect(0, 0, screenW, screenH);
       }
 
       // ── Finger dot — project camera position directly to screen ──────
+      let out = null;
       if (fx !== null && st.Hcs && !st.Hcs.empty()) {
         const src = cv.matFromArray(1, 1, cv.CV_32FC2, [fx, fy]);
         const dst = new cv.Mat();
@@ -439,49 +487,45 @@ export function TactileExplorer({
 
           if (map && mapLoadedRef?.current) {
             const { lng, lat } = map.unproject([sx, sy]);
-            const newCoord = { lng, lat };
-            setCoord(newCoord);
-            onCoord?.(newCoord);
-            return requestAnimationFrame(loop);
+            out = { lng, lat };
           }
         }
       }
+      setCoord(out);
+      onCoord?.(out);
 
-      setCoord(null);
-      onCoord?.(null);
-
-      // ── Debug panel: live camera + projected template corners ─────
-      const dbg = debugRef.current;
-      if (dbg) {
-        const dw = 320;
-        const dh = Math.round(dw * vh / vw);
-        dbg.width  = dw;
-        dbg.height = dh;
-        const dCtx = dbg.getContext('2d');
-        dCtx.drawImage(off, 0, 0, dw, dh);
-
-        if (st.Hfwd && !st.Hfwd.empty()) {
-          const tplC = cv.matFromArray(4, 1, cv.CV_32FC2,
-            [0, 0, st.tplW, 0, st.tplW, st.tplH, 0, st.tplH]);
-          const camC = new cv.Mat();
-          cv.perspectiveTransform(tplC, camC, st.Hfwd);
-          tplC.delete();
-          const sx = dw / vw, sy = dh / vh;
-          dCtx.beginPath();
-          for (let i = 0; i < 4; i++) {
-            const x = camC.data32F[i * 2] * sx;
-            const y = camC.data32F[i * 2 + 1] * sy;
-            i === 0 ? dCtx.moveTo(x, y) : dCtx.lineTo(x, y);
-          }
-          dCtx.closePath();
-          dCtx.strokeStyle = '#22c55e';
-          dCtx.lineWidth = 2;
-          dCtx.stroke();
-          camC.delete();
-        }
-      }
-
+      drawDebug(fx, fy);
       requestAnimationFrame(loop);
+    }
+
+    // Live camera thumbnail with captured corners + fingertip overlay.
+    function drawDebug(fx, fy) {
+      const dbg = debugRef.current;
+      if (!dbg) return;
+      const off = offRef.current;
+      const vw = off.width, vh = off.height;
+      if (!vw || !vh) return;
+      const dw = 320, dh = Math.round((dw * vh) / vw);
+      dbg.width = dw; dbg.height = dh;
+      const ctx = dbg.getContext('2d');
+      const sx = dw / vw, sy = dh / vh;
+      ctx.drawImage(off, 0, 0, dw, dh);
+
+      // Deliberately no corner quad here — it drew a green outline of the
+      // template's own rectangle, which no longer exists. During capture, show
+      // only small ticks for corners already locked in.
+      if (phaseRef.current === 'capturing') {
+        const corners = captureRef.current.corners;
+        ctx.fillStyle = 'rgba(250,204,21,0.9)';
+        corners.forEach(([x, y]) => {
+          ctx.beginPath(); ctx.arc(x * sx, y * sy, 3, 0, Math.PI * 2); ctx.fill();
+        });
+      }
+      if (fx !== null) {
+        ctx.beginPath(); ctx.arc(fx * sx, fy * sy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(250,204,21,0.9)'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+        ctx.fill(); ctx.stroke();
+      }
     }
 
     init().catch(e => {
@@ -493,16 +537,20 @@ export function TactileExplorer({
       cancelled = true;
       runningRef.current = false;
       videoRef.current?.srcObject?.getTracks()?.forEach(t => t.stop());
-      st.Hfwd?.delete(); st.Hinv?.delete(); st.Hcs?.delete();
+      st.Hfwd?.delete(); st.Hinv?.delete(); st.Hcs?.delete(); st.HsnapToUv?.delete();
       st.descTpl?.delete(); st.kpTpl?.delete();
       st.sift?.delete(); st.bf?.delete();
-      st.Hfwd = st.Hinv = st.Hcs = st.descTpl = st.kpTpl = st.sift = st.bf = null;
+      st.Hfwd = st.Hinv = st.Hcs = st.HsnapToUv = st.descTpl = st.kpTpl = st.sift = st.bf = null;
       st.bestInliers = 0;
       st.bestInliersAt = 0;
       st.oefX = makeOneEuroFilter();
       st.oefY = makeOneEuroFilter();
     };
-  }, [templateUrl]);
+  }, []);
+
+  const progress = phase === 'capturing'
+    ? ` (${captureRef.current.index}/4 — ${CORNER_PROMPTS[Math.min(captureRef.current.index, 3)]})`
+    : '';
 
   // Compute live distance to ground-truth probe
   const probeDistMeters = (coord && groundTruthProbe) ? (() => {
@@ -519,13 +567,19 @@ export function TactileExplorer({
       <video ref={videoRef} muted playsInline style={{ display: 'none' }} />
       <canvas ref={overlayRef} className="tactile-map-overlay" />
 
-      {/* Homography controls: Button */}
+      {/* Registration + homography controls */}
       <div className="tactile-controls-panel">
+        <button type="button" className="tactile-fix-btn" onClick={startCapture}>
+          {phase === 'ready' ? '↻ Re-register [ r ]' : '🎯 Register material [ r ]'}
+        </button>
         <button
           type="button"
           className={`tactile-fix-btn ${isFixed ? 'fixed' : ''}`}
           onClick={() => toggleFixed(!isFixed)}
-          title="Click or press Semicolon (;) to fix current homography"
+          disabled={phase !== 'ready'}
+          title={phase === 'ready'
+            ? 'Freeze the current homography (press ; )'
+            : 'Register the material first — then Fix freezes the homography'}
         >
           {isFixed ? '🔓 Unfix Homography [ ; ]' : '🔒 Fix Homography [ ; ]'}
         </button>
@@ -535,7 +589,7 @@ export function TactileExplorer({
       <div className="tactile-debug-panel">
         <div className="tactile-debug-header">
           <span>
-            {status} &nbsp;·&nbsp; good: {debugInfo.good} &nbsp;·&nbsp; inliers: {debugInfo.inliers}
+            {status}{progress} &nbsp;·&nbsp; good: {debugInfo.good} &nbsp;·&nbsp; inliers: {debugInfo.inliers}
             {gestureHint ? <>&nbsp;·&nbsp;<strong>{gestureHint}</strong></> : null}
           </span>
           <button
@@ -577,7 +631,9 @@ export function TactileExplorer({
         </div>
       )}
       {!status.startsWith('Tracking') && (
-        <div className="tactile-status-hud">{gestureHint ? `${status} — ${gestureHint}` : status}</div>
+        <div className="tactile-status-hud">
+          {gestureHint ? `${status}${progress} — ${gestureHint}` : `${status}${progress}`}
+        </div>
       )}
     </>
   );

@@ -18,6 +18,10 @@
 
 export {
   createRecognizer,
+  probeOnDeviceStt,
+  isSttOfflineCapable,
+  canInstallOnDeviceStt,
+  installOnDeviceStt,
   readResult,
   buildPhrases,
   RecognizerState,

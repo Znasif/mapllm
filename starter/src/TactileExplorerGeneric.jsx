@@ -4,14 +4,11 @@ import { uvToLngLat } from './audiom';
 import { openCameraStream } from './cameraDevices';
 import { createPointingTracker, pointingHint } from './gestureRecognizer';
 import { speak } from './lib/speak';
+import { createCornerCapture, CORNER_PROMPTS } from './lib/cornerRegistration';
 
 const MEDIAPIPE_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const HAND_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-
-const CORNER_PROMPTS = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
-const DWELL_MS = 1500;   // hold time to lock a corner
-const DWELL_R = 45;      // px jitter tolerance while holding
 
 function waitForOpenCV() {
   return new Promise((resolve) => {
@@ -112,9 +109,10 @@ export function TactileExplorerGeneric({
   const [cell, setCell] = useState(null);
 
   const phaseRef = useRef('idle');       // 'idle' | 'capturing' | 'ready'
-  const cornerIdxRef = useRef(0);
-  const cornerPxRef = useRef([]);        // [[x,y]TL,TR,BR,BL] in snapshot px
-  const dwellRef = useRef(null);         // { x, y, since }
+  // Dwell state machine: [[x,y]TL,TR,BR,BL] in snapshot px, plus the hold
+  // timing. Shared with the OSM build (lib/cornerRegistration.js) and checked
+  // headlessly by scripts/test_cornerRegistration.mjs.
+  const captureRef = useRef(createCornerCapture());
   const isFixedRef = useRef(false);
 
   const s = useRef({
@@ -136,9 +134,7 @@ export function TactileExplorerGeneric({
   const [isFixed, setIsFixed] = useState(false);
 
   const startCapture = () => {
-    cornerIdxRef.current = 0;
-    cornerPxRef.current = [];
-    dwellRef.current = null;
+    captureRef.current.reset();
     s.current.HsnapToUv?.delete(); s.current.HsnapToUv = null;
     s.current.Hfwd?.delete(); s.current.Hinv?.delete();
     s.current.Hfwd = s.current.Hinv = null;
@@ -182,7 +178,7 @@ export function TactileExplorerGeneric({
       st.sift.detectAndCompute(gray, noMask, st.kpTpl, st.descTpl);
       noMask.delete(); gray.delete();
 
-      const c = cornerPxRef.current;
+      const c = captureRef.current.corners;
       const srcPx = cv.matFromArray(4, 1, cv.CV_32FC2,
         [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]]);
       const dstUv = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1, 0, 1, 1, 0, 1]);
@@ -325,23 +321,16 @@ export function TactileExplorerGeneric({
 
       // ── Corner capture ─────────────────────────────────────────────
       if (phaseRef.current === 'capturing') {
-        if (fx !== null) {
-          const d = dwellRef.current;
-          if (!d || Math.hypot(fx - d.x, fy - d.y) > DWELL_R) {
-            dwellRef.current = { x: fx, y: fy, since: now };
-          } else if (now - d.since > DWELL_MS) {
-            cornerPxRef.current[cornerIdxRef.current] = [fx, fy];
-            cornerIdxRef.current += 1;
-            dwellRef.current = null;
-            beep();
-            if (cornerIdxRef.current >= 4) {
-              captureReference();
-              phaseRef.current = 'ready'; setPhase('ready');
-              setStatus('Tracking');
-              speak('Map registered. Move your finger on the map.');
-            } else {
-              speak(`Point at the ${CORNER_PROMPTS[cornerIdxRef.current]} corner and hold.`);
-            }
+        const cap = captureRef.current.update(fx, fy, now);
+        if (cap.locked) {
+          beep();
+          if (cap.complete) {
+            captureReference();
+            phaseRef.current = 'ready'; setPhase('ready');
+            setStatus('Tracking');
+            speak('Map registered. Move your finger on the map.');
+          } else {
+            speak(`Point at the ${cap.nextPrompt} corner and hold.`);
           }
         }
         drawDebug(fx, fy);
@@ -472,7 +461,7 @@ export function TactileExplorerGeneric({
       const W = 320, H = Math.max(60, Math.round(W / A));
       const off = rectOffRef.current;
 
-      const registered = cornerPxRef.current.length >= 4
+      const registered = captureRef.current.corners.length >= 4
         && st.Hfwd && !st.Hfwd.empty() && st.HsnapToUv;
 
       if (!registered) {
@@ -486,7 +475,7 @@ export function TactileExplorerGeneric({
         c0.fillStyle = '#94a3b8'; c0.font = '10px sans-serif';
         c0.fillText('this box = the Audiom window', W / 2, H / 2 + 12);
       } else {
-        const c = cornerPxRef.current;
+        const c = captureRef.current.corners;
         const snapPts = cv.matFromArray(4, 1, cv.CV_32FC2,
           [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]]);
         const camPts = new cv.Mat();
@@ -608,7 +597,7 @@ export function TactileExplorerGeneric({
       // green bounding box on the map. Tracking health is the inliers count.
       // During capture, show only small ticks for corners already locked in.
       if (phaseRef.current === 'capturing') {
-        const corners = cornerPxRef.current;
+        const corners = captureRef.current.corners;
         ctx.fillStyle = 'rgba(250,204,21,0.9)';
         corners.forEach(([x, y]) => {
           ctx.beginPath(); ctx.arc(x * sx, y * sy, 3, 0, Math.PI * 2); ctx.fill();
@@ -636,7 +625,7 @@ export function TactileExplorerGeneric({
     };
   }, [attempt]);
 
-  const progress = phase === 'capturing' ? ` (${cornerIdxRef.current}/4 — ${CORNER_PROMPTS[Math.min(cornerIdxRef.current, 3)]})` : '';
+  const progress = phase === 'capturing' ? ` (${captureRef.current.index}/4 — ${CORNER_PROMPTS[Math.min(captureRef.current.index, 3)]})` : '';
 
   return (
     <>

@@ -35,6 +35,15 @@ function metersBetween(a, b) {
  *                record into — the outbound mirror of `coordRef`, so the M7
  *                dispatcher can answer `whats_here` with a synchronous read
  *                and no round trip (§2.2).
+ *  - onProbe   : OPTIONAL diagnostic. Handed the raw bounds-probe telemetry
+ *                once discovery finishes — seed, every `isInside` sample, the
+ *                expansion bracket and the resolved coordinate for each of the
+ *                four edges. `onBounds` is unaffected: same argument, same call
+ *                site, same timing, and a consumer that passes no `onProbe`
+ *                behaves exactly as before. See `lib/probeGeometry.js` for what
+ *                the telemetry is FOR — in short, the probe measures a
+ *                cross-section through the seed, not a bounding box, and the
+ *                only way to see that is to look at the samples.
  *  - onChannel : handed `{ channel, whatsHere }` once the side-effect channel
  *                exists. The seam M7/M13 drive `moveAvatar`, `executeCommand`
  *                and `route_to` mode `fly_me_there` through. Pass a stable
@@ -52,7 +61,7 @@ function metersBetween(a, b) {
  */
 export function AudiomMap({
   mapId, sources, view, bbox, coordRef,
-  throttleMs = 500, stepMeters = 0, onEvent, onStart, onBounds,
+  throttleMs = 500, stepMeters = 0, onEvent, onStart, onBounds, onProbe,
   syncKey = 0, syncView = false, fill = false,
   featureRef, onChannel,
   onUtterance, speechPhrases, speechLang = 'en-US', allowCloudStt = true,
@@ -178,52 +187,89 @@ export function AudiomMap({
     // the north edge with a vertical step would be blocked by the edge itself
     // and read as "outside", so vertical edges are tested with a horizontal step
     // and vice versa.
-    const isInside = async (lng, lat, probe) => {
+    //
+    // `samples` is a pure out-param for the diagnostic: every attempt is pushed,
+    // in the order taken, INCLUDING the ones that answered nothing (`inside:
+    // null`, a failed `getState`). Recording the failures is the point — an edge
+    // that gave up mid-search looks identical to a short one unless you can see
+    // where the samples stopped. Nothing here reads `samples` back, so the
+    // outcome and the timing are exactly what they were before.
+    const isInside = async (lng, lat, probe, samples) => {
       channel.moveAvatar([lng, lat]);
       await sleep(200);
       const before = await channel.getState();
-      if (!before) return null;
+      if (!before) { samples?.push({ lng, lat, inside: null }); return null; }
       channel.executeCommand(probe);
       await sleep(220);
       const after = await channel.getState();
-      if (!after) return null;
-      return Math.hypot(after[0] - before[0], after[1] - before[1]) > 1e-9;
+      if (!after) { samples?.push({ lng, lat, inside: null }); return null; }
+      const moved = Math.hypot(after[0] - before[0], after[1] - before[1]) > 1e-9;
+      samples?.push({ lng, lat, inside: moved });
+      return moved;
     };
 
     // Binary search one edge outward from a known-inside point.
-    const findEdge = async (from, axis, dir, probe) => {
+    //
+    // `trace` is the second pure out-param: it collects axis/direction, the
+    // samples, the final expansion bracket and the resolved value. Every early
+    // return writes its reason into it first, so an unresolved edge carries WHY
+    // it failed rather than just a null. The returned value is unchanged.
+    const findEdge = async (from, axis, dir, probe, trace) => {
       const at = (d) => (axis === 'lng' ? [from[0] + d, from[1]] : [from[0], from[1] + d]);
+      const samples = trace ? trace.samples : null;
+      if (trace) { trace.axis = axis; trace.dir = dir; trace.probe = probe; }
       let inside = 0;
       let outside = null;
       for (let d = 0.5; d <= 200; d *= 2) {       // expand until we're outside
         const p = at(dir * d);
-        const ok = await isInside(p[0], p[1], probe);
-        if (ok === null) return null;
+        const ok = await isInside(p[0], p[1], probe, samples);
+        if (ok === null) { if (trace) trace.reason = 'probe-failed'; return null; }
         if (ok) inside = dir * d; else { outside = dir * d; break; }
       }
-      if (outside === null) return null;
+      if (trace) { trace.bracket.lastInsideDeg = inside; trace.bracket.firstOutsideDeg = outside; }
+      if (outside === null) { if (trace) trace.reason = 'no-outside-within-200deg'; return null; }
       for (let i = 0; i < 10; i++) {               // then bisect
         const mid = (inside + outside) / 2;
         const p = at(mid);
-        const ok = await isInside(p[0], p[1], probe);
-        if (ok === null) break;
+        const ok = await isInside(p[0], p[1], probe, samples);
+        if (ok === null) { if (trace) trace.bisectAborted = true; break; }
         if (ok) inside = mid; else outside = mid;
       }
       const edge = at((inside + outside) / 2);
-      return axis === 'lng' ? edge[0] : edge[1];
+      const value = axis === 'lng' ? edge[0] : edge[1];
+      if (trace) { trace.value = value; trace.resolved = true; }
+      return value;
     };
 
+    const newTrace = () => ({
+      axis: null, dir: null, probe: null,
+      samples: [], bracket: { lastInsideDeg: null, firstOutsideDeg: null },
+      value: null, resolved: false, reason: null, bisectAborted: false,
+    });
+
     async function discoverBounds(start) {
-      const west  = (setStatus('Bounds… W'), await findEdge(start, 'lng', -1, 'up'));
-      const east  = (setStatus('Bounds… E'), await findEdge(start, 'lng', +1, 'up'));
-      const south = (setStatus('Bounds… S'), await findEdge(start, 'lat', -1, 'left'));
-      const north = (setStatus('Bounds… N'), await findEdge(start, 'lat', +1, 'left'));
+      const startedAt = Date.now();
+      const edges = { west: newTrace(), east: newTrace(), south: newTrace(), north: newTrace() };
+      const west  = (setStatus('Bounds… W'), await findEdge(start, 'lng', -1, 'up', edges.west));
+      const east  = (setStatus('Bounds… E'), await findEdge(start, 'lng', +1, 'up', edges.east));
+      const south = (setStatus('Bounds… S'), await findEdge(start, 'lat', -1, 'left', edges.south));
+      const north = (setStatus('Bounds… N'), await findEdge(start, 'lat', +1, 'left', edges.north));
       channel.moveAvatar(start); // restore
       setStatus('Ready');
-      if ([west, east, south, north].every((v) => Number.isFinite(v))
-          && east > west && north > south) {
-        onBounds?.([west, south, east, north]);
-      }
+      const bounds = ([west, east, south, north].every((v) => Number.isFinite(v))
+        && east > west && north > south)
+        ? [west, south, east, north]
+        : null;
+      // `onBounds` first and unconditionally-shaped as before, so adding the
+      // diagnostic cannot move the moment the window model is seeded.
+      if (bounds) onBounds?.(bounds);
+      onProbe?.({
+        seed: { lng: start[0], lat: start[1] },
+        edges,
+        bounds,
+        startedAt,
+        finishedAt: Date.now(),
+      });
     }
 
     function onMessage(type, payload) {
@@ -255,7 +301,7 @@ export function AudiomMap({
     }
 
     return channel.onMessage(onMessage);
-  }, [channel, src, onEvent, onStart, onBounds]);
+  }, [channel, src, onEvent, onStart, onBounds, onProbe]);
 
   // Throttled avatar updates from the shared fingertip ref.
   useEffect(() => {

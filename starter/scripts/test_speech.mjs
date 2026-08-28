@@ -994,6 +994,87 @@ head('14. recognizer — transcripts, and the resultIndex every tutorial gets wr
     'and the transcript lands straight on an L0 lexicon entry — mic to answer with no model');
 }
 
+{
+  // Two segments finalized in the SAME event — continuous mode can hand back
+  // more than one final at once. Both must go out, in order, once each.
+  const { FakeSR, instances } = makeSpeechRecognition();
+  const finals = [];
+  const all = [];
+  const r = createRecognizer({
+    SpeechRecognition: FakeSR,
+    onFinal: (t) => finals.push(t),
+    onResult: (res) => all.push([res.transcript, res.isFinal]),
+  });
+  r.start();
+  instances[0].emitResult(resultEvent([
+    { transcript: 'first segment', isFinal: true },
+    { transcript: 'second segment', isFinal: true },
+  ]));
+  check(eq(finals, ['first segment', 'second segment']),
+    'two finals in one event are both delivered, in order');
+  check(all.length === 2 && all.every(([, isFinal]) => isFinal === true),
+    'each arrives as its own final onResult, and neither twice');
+}
+
+{
+  // A final followed by a trailing interim in the same event: the final goes
+  // to onFinal, the interim must not.
+  const { FakeSR, instances } = makeSpeechRecognition();
+  const finals = [];
+  const all = [];
+  const r = createRecognizer({
+    SpeechRecognition: FakeSR,
+    onFinal: (t) => finals.push(t),
+    onResult: (res) => all.push([res.transcript, res.isFinal]),
+  });
+  r.start();
+  instances[0].emitResult(resultEvent([
+    { transcript: 'turn left', isFinal: true },
+    { transcript: 'then go', isFinal: false },
+  ]));
+  check(eq(finals, ['turn left']), 'the final segment reaches onFinal');
+  check(eq(all, [['turn left', true], ['then go', false]]),
+    'the trailing interim arrives as its own isFinal:false result, and never reaches onFinal');
+}
+
+{
+  // The regression this exists for: continuous mode re-sends the whole
+  // `results` list on every event. Event 2 resends final A alongside new
+  // final B — A must not be delivered twice.
+  const { FakeSR, instances } = makeSpeechRecognition();
+  const finals = [];
+  const r = createRecognizer({
+    SpeechRecognition: FakeSR,
+    onFinal: (t) => finals.push(t),
+  });
+  r.start();
+  instances[0].emitResult(resultEvent([{ transcript: 'segment A', isFinal: true }]));
+  instances[0].emitResult(resultEvent([
+    { transcript: 'segment A', isFinal: true },
+    { transcript: 'segment B', isFinal: true },
+  ]));
+  check(eq(finals, ['segment A', 'segment B']),
+    'a resent final is not redelivered — only the newly finalized segment is new',
+    JSON.stringify(finals));
+}
+
+{
+  // Several non-final segments in one event join into a single interim string.
+  const { FakeSR, instances } = makeSpeechRecognition();
+  const all = [];
+  const r = createRecognizer({
+    SpeechRecognition: FakeSR,
+    onResult: (res) => all.push([res.transcript, res.isFinal]),
+  });
+  r.start();
+  instances[0].emitResult(resultEvent([
+    { transcript: 'turn', isFinal: false },
+    { transcript: 'left here', isFinal: false },
+  ]));
+  check(eq(all, [['turn left here', false]]),
+    'multiple interim segments in one event are joined into one space-separated result, delivered once');
+}
+
 /* ========================================== 15. recognizer — phrase bias == */
 
 head('15. recognizer — contextual biasing, the free half of the proper-noun problem');

@@ -118,6 +118,36 @@ async function defaultCreateInstance({ wasmUrl, config } = {}) {
 }
 
 /**
+ * Delete every model wllama has cached in OPFS.
+ *
+ * ⚠️ The obvious hand-written version is wrong, and it wasted an evening:
+ * wllama does NOT keep a `models/` directory at the OPFS root, so
+ * `removeEntry('models', {recursive: true})` throws `NotFoundError` and deletes
+ * nothing — which reads as "Chrome won't clear OPFS" when in fact the wrong key
+ * was being removed. The real layout (see `esm/index.js`, OPFS_UTILS_WORKER_CODE
+ * and `CacheManager`) is:
+ *
+ *     <opfs root>/cache/<sha1(fullURL)>_<fileName>
+ *     <opfs root>/cache/__metadata__<sha1(fullURL)>_<fileName>
+ *
+ * Note this drops the whole cache, both tiers. Prefer
+ * `wllama.cacheManager.deleteMany(predicate)` when only one model should go.
+ *
+ * @returns {Promise<boolean>} true if a cache directory was found and removed
+ */
+export async function clearWllamaCache() {
+  if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) return false;
+  const root = await navigator.storage.getDirectory();
+  try {
+    await root.removeEntry('cache', { recursive: true });
+    return true;
+  } catch (err) {
+    if (err?.name === 'NotFoundError') return false; // nothing cached; not an error
+    throw err;
+  }
+}
+
+/**
  * One loaded model in one worker. The unit v3's `n_parallel: 1` forces on us.
  */
 export class WllamaEngine {
@@ -190,14 +220,43 @@ export class WllamaEngine {
      */
     const isShard = (href) => /-\d{5}-of-\d{5}\.gguf(\?|$)/.test(href);
 
+    /**
+     * ⚠️ A HEAD is not enough, and this is the failure that wrote `<!do` into OPFS.
+     *
+     * Vite's `htmlFallbackMiddleware` answers an unmatched `/models/*.gguf` with
+     * **200 + index.html**, not 404. A status-only check therefore passes; the
+     * `isShard` exemption above skips the one length check that might have
+     * caught it; wllama downloads five HTML pages; and `Model.validate()` calls
+     * them VALID — it compares `metadata.originalSize` against the file size and
+     * the downloads did complete, so the sizes agree. Nothing inside wllama ever
+     * looks for the GGUF magic. llama.cpp is handed `<!do` and aborts the module.
+     *
+     * So read the first four bytes and require `GGUF`. One ranged GET, and it is
+     * the only check that catches an HTML body from a local dev server and from
+     * a redirecting CDN alike.
+     */
     const usable = async (label, href) => {
       if (!fetchImpl) return true; // no way to check; let wllama try
       try {
-        const res = await fetchImpl(href, { method: 'HEAD', redirect: 'follow' });
+        const res = await fetchImpl(href, { headers: { Range: 'bytes=0-3' }, redirect: 'follow' });
         if (!res.ok) { tried.push(`${label} → HTTP ${res.status}`); return false; }
-        const len = Number(res.headers?.get?.('content-length'));
+
+        // A 206 describes the slice, so the full size lives in Content-Range.
+        // A server that ignores Range reports the whole file in Content-Length.
+        const len = res.status === 206
+          ? Number(res.headers?.get?.('content-range')?.split('/')?.[1])
+          : Number(res.headers?.get?.('content-length'));
         if (expected && !isShard(href) && Number.isFinite(len) && len > 0 && len !== expected) {
           tried.push(`${label} → ${len} bytes, expected ${expected}`);
+          return false;
+        }
+
+        const magic = String.fromCharCode(
+          ...new Uint8Array((await res.arrayBuffer()).slice(0, 4)),
+        );
+        if (magic !== 'GGUF') {
+          const ctype = res.headers?.get?.('content-type') || 'unknown content-type';
+          tried.push(`${label} → not a GGUF; first bytes are ${JSON.stringify(magic)} (${ctype})`);
           return false;
         }
         return true;
@@ -224,6 +283,64 @@ export class WllamaEngine {
   }
 
   /**
+   * Evict anything in wllama's OPFS cache that is not a GGUF, and say so.
+   *
+   * ⚠️ This is NOT redundant with `#resolveSource`, and believing it was cost a
+   * full debugging round. The preflight guards what wllama DOWNLOADS. It cannot
+   * help here, because on a warm cache wllama never reaches the network:
+   * `ModelManager` reads OPFS first and `Model.validate()` only asks whether
+   * `metadata.originalSize === file.size`. When Vite's html fallback served
+   * `index.html` for five shards, all five downloads COMPLETED, so the sizes
+   * agree and the cache is judged VALID forever. The observed result:
+   *
+   *     gguf_init_from_reader: invalid magic characters: '<!do', expected 'GGUF'
+   *
+   * survives a fixed preflight, a dev-server fix and a page reload, because the
+   * poison is already on disk under the same URL key.
+   *
+   * Every shard of a split GGUF carries its own magic (verified against all
+   * five of e2b-q4-0000N-of-00005), so a 4-byte read per entry is a complete
+   * test and costs nothing.
+   */
+  async #evictNonGgufCacheEntries(instance) {
+    const cache = instance?.cacheManager;
+    if (!cache?.list) return [];
+    let entries;
+    try {
+      entries = await cache.list(); // already excludes __metadata__ sidecars
+    } catch {
+      return [];
+    }
+
+    const poisoned = [];
+    for (const entry of entries) {
+      try {
+        const blob = await cache.open(entry.name);
+        if (!blob) continue;
+        const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+        if (String.fromCharCode(...head) !== 'GGUF') poisoned.push(entry);
+      } catch {
+        // Unreadable is as bad as wrong; let the re-download settle it.
+        poisoned.push(entry);
+      }
+    }
+
+    if (poisoned.length) {
+      const names = new Set(poisoned.map((e) => e.name));
+      // `deleteMany` drops the metadata sidecar too, which matters: an orphaned
+      // sidecar makes `getMetadata` report a size for a file that is gone.
+      await cache.deleteMany((e) => names.has(e.name));
+      console.warn(
+        `WllamaEngine(${this.profile.id}): evicted ${poisoned.length} non-GGUF cache ` +
+        `entr${poisoned.length === 1 ? 'y' : 'ies'} from OPFS — ` +
+        poisoned.map((e) => `${e.name} (${e.size} bytes, from ${e.metadata?.originalURL || 'unknown URL'})`).join('; ') +
+        '. These will be re-downloaded.',
+      );
+    }
+    return poisoned;
+  }
+
+  /**
    * Idempotent. Concurrent callers share one download; a caller that arrives
    * after a successful load returns immediately.
    */
@@ -239,6 +356,10 @@ export class WllamaEngine {
         config: this.wllamaConfig,
         profile: this.profile,
       });
+      // Before anything is read from OPFS. See the method's comment for why the
+      // network preflight below cannot cover this case.
+      await this.#evictNonGgufCacheEntries(instance);
+
       const params = {
         ...this.loadParams,
         progressCallback: (p) => this.onProgress?.({ ...p, profile: this.profile.id }),
@@ -256,6 +377,16 @@ export class WllamaEngine {
       //   2. The abort surfaces as `RuntimeError: (ABORT)` with no mention of the
       //      URL, the status, or the byte count — which is why a plain 404 got
       //      diagnosed as a wrong model, twice. Check first; say what was wrong.
+      //
+      // ⚠️ There is deliberately NO catch-and-retry here, and it must stay that
+      // way. A retry wrapper was tried and removed: point 1 above is the reason
+      // it cannot work — after a GGML abort `instance` is dead, so a second
+      // `loadModelFrom*` on it is guaranteed to fail. What such a wrapper does
+      // in practice is hide `#resolveSource`'s message (the one that names the
+      // URL, the status and the byte count) behind a vaguer second error, and,
+      // if it purges OPFS on the way, discard 2.6 GB of good weights on every
+      // failure. The preflight above is the fix; a retry is not.
+      //
       const source = await this.#resolveSource();
       if (source.kind === 'url') {
         await instance.loadModelFromUrl(source.url, params);
@@ -269,6 +400,30 @@ export class WllamaEngine {
           'split GGUF) or `hf` {repo, filePath}',
         );
       }
+
+      // ⚠️ wllama v3 does not always reject `loadModelFrom*` when the embedded
+      // llama-server fails to open the weights. The failure is written to the
+      // worker's stderr — `llama_model_load: error loading model` — and the
+      // promise resolves anyway. Left unchecked the engine is marked `ready`,
+      // the first question reaches a server with no model, and what the user is
+      // shown is two levels of nonsense: `tools param requires --jinja flag`
+      // (there is no chat template because there is no model), then the glue
+      // stream desynchronises and reports
+      //
+      //     RangeError: Invalid typed array length: 1163217991
+      //
+      // which is 0x45554C47 — the four ASCII bytes `GLUE`, wllama's own frame
+      // magic, read as a buffer length. Neither message names the real problem.
+      // Ask wllama directly instead, and fail here where the error is truthful.
+      if (instance.isModelLoaded && !instance.isModelLoaded()) {
+        throw new Error(
+          `WllamaEngine(${this.profile.id}): wllama resolved the load but no model is open. ` +
+          'Check the worker log for `error loading model` — the usual cause is cached bytes ' +
+          'that are not a GGUF. The cache guard above should have evicted them; if it did not, ' +
+          'clear OPFS with `clearWllamaCache()` and reload.',
+        );
+      }
+
       this.instance = instance;
       // Captured once: the transport's memory reporting and the harness both
       // read n_layer/n_embd/n_ctx from here rather than hardcoding architecture.
@@ -353,6 +508,98 @@ export class WllamaTransport {
     // `LocalLLMClient` copies `transport.baseUrl` onto itself for scripts that
     // print it. There is no URL here, and saying so beats saying "/llm/v1".
     this.baseUrl = null;
+
+    // A console handle for `probe()`. Browser only, and deliberately the LAST
+    // transport constructed wins — there is one per session.
+    if (typeof globalThis !== 'undefined' && typeof window !== 'undefined') {
+      globalThis.__llm = this;
+      globalThis.__llmProbe = (...args) => this.probe(...args);
+    }
+  }
+
+  /**
+   * Bisect the `no tokens to decode` → PR #20277 abort, from the console.
+   *
+   * Run `await __llmProbe()` in DevTools after the model has loaded. It sends
+   * three requests of increasing shape and reports the first one that dies:
+   *
+   *   1. `hi`                      — no system message, no tools
+   *   2. system + user             — the real prompt, still no tools
+   *   3. system + user + tools     — what the dispatcher actually sends
+   *
+   * Which step aborts is the answer, and nothing else in this session has been
+   * able to produce it:
+   *
+   *   step 1 aborts   → the loaded model/context is broken. Not the prompt, not
+   *                     the tools, not the dispatcher. Suspect the weights on
+   *                     disk (a bad shard passes `Model.validate()`, see
+   *                     `#evictNonGgufCacheEntries`) or the load params.
+   *   step 2 aborts   → the prompt. Length, or a chat-template rendering that
+   *                     produces zero tokens.
+   *   step 3 aborts   → the tools block — i.e. the jinja tool rendering, which
+   *                     is the only thing step 3 adds.
+   *   nothing aborts  → the transport is fine and the trigger is upstream in
+   *                     the dispatcher's own body (a different message array
+   *                     than the one built here).
+   *
+   * ⚠️ Each step that aborts kills the WASM module, so the run STOPS at the
+   * first failure. A second step after an abort would fail for the trivial
+   * reason that the instance is dead, and reading that as a second data point
+   * is exactly the mistake this method exists to prevent. Reload the page
+   * between probes.
+   *
+   * @param {object} [opts]
+   * @param {object[]} [opts.tools]  tool array for step 3; defaults to none,
+   *        in which case step 3 is skipped. Pass
+   *        `__llm.probe({ tools: dispatcher.served().tools })` to include it.
+   * @returns {Promise<object[]>} one record per step attempted
+   */
+  async probe({ tools } = {}) {
+    const SYSTEM = 'You control a tactile map for a blind user exploring by touch.';
+    const steps = [
+      { name: '1/plain', body: { messages: [{ role: 'user', content: 'hi' }] } },
+      {
+        name: '2/system+user',
+        body: {
+          messages: [
+            { role: 'system', content: SYSTEM },
+            { role: 'user', content: 'how many streets on this map' },
+          ],
+        },
+      },
+    ];
+    if (tools?.length) {
+      steps.push({
+        name: '3/system+user+tools',
+        body: {
+          messages: steps[1].body.messages,
+          tools,
+          chat_template_kwargs: { enable_thinking: false },
+        },
+      });
+    } else {
+      console.warn('[llm probe] no `tools` passed — step 3 skipped. Re-run as ' +
+        '`__llmProbe({ tools: <your dispatcher>.served().tools })` to test the tool block.');
+    }
+
+    const results = [];
+    for (const step of steps) {
+      const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+      try {
+        const out = await this.chat({ ...step.body, max_tokens: 16 });
+        const text = out?.choices?.[0]?.message?.content ?? '';
+        const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : 0) - t0);
+        console.warn(`[llm probe] ${step.name} OK in ${ms}ms → ${JSON.stringify(String(text).slice(0, 120))}`);
+        results.push({ step: step.name, ok: true, ms, text });
+      } catch (err) {
+        console.error(`[llm probe] ${step.name} FAILED — ${err?.message || err}`, err);
+        console.error('[llm probe] stopping here: an abort kills the WASM module, so every ' +
+          'later step would fail for that reason alone. Reload the page before probing again.');
+        results.push({ step: step.name, ok: false, error: String(err?.message || err) });
+        break;
+      }
+    }
+    return results;
   }
 
   /** @returns {WllamaEngine} */
@@ -424,6 +671,59 @@ export class WllamaTransport {
     const options = toWllamaOptions(body);
     options.max_tokens = clampMaxTokens(body);
     options.abortSignal = signal;
+
+    // ⚠️ Diagnostic for the `no tokens to decode` abort (llama.cpp PR #20277 —
+    // a kill switch that fires after N consecutive EMPTY batches, so what it is
+    // really reporting is "this request produced nothing to decode"). Printing
+    // the shape of the outgoing request is the only way to tell an empty/blank
+    // message from a prompt that overruns n_ctx; both look identical from the
+    // WASM side, and both end in the same bare `(ABORT)`.
+    if (typeof console !== 'undefined') {
+      const ctx = engine.contextInfo?.n_ctx;
+      const msgs = Array.isArray(body.messages) ? body.messages : [];
+      const chars = msgs.reduce((n, m) => n + (typeof m?.content === 'string' ? m.content.length : 0), 0);
+      // ⚠️ `console.warn`, not `console.debug`. Chrome's DevTools console hides
+      // `debug` unless the level dropdown is switched to Verbose, so the one
+      // line this whole investigation depends on was being printed and never
+      // seen. Warn shows at the default level.
+      console.warn(
+        `[llm] request → ${msgs.length} message(s), ${chars} chars ` +
+        `(~${Math.round(chars / 4)} tok est), ${body.tools?.length ?? 0} tool(s), ` +
+        `max_tokens=${options.max_tokens}, n_ctx=${ctx ?? '?'}`,
+        msgs.map((m) => ({
+          role: m?.role,
+          type: typeof m?.content,
+          len: typeof m?.content === 'string' ? m.content.length : null,
+          head: typeof m?.content === 'string' ? m.content.slice(0, 120) : m?.content,
+        })),
+      );
+      // ⚠️ An assistant turn that carries `tool_calls` has empty content BY
+      // DESIGN — that is how the OpenAI shape says "I called a tool instead of
+      // speaking", and the jinja template renders the calls, not the content.
+      // Counting it as blank made round 2 of every successful tool loop print a
+      // false alarm, which is worse than useless in a diagnostic whose whole job
+      // is to be believed. Array content (multimodal parts) is usable too. What
+      // is genuinely fatal is a message with nothing at all to render.
+      const usable = (m) => {
+        if (typeof m?.content === 'string' && m.content.trim()) return true;
+        if (Array.isArray(m?.content) && m.content.length) return true;
+        if (m?.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) return true;
+        return false;
+      };
+      const blank = msgs.filter((m) => !usable(m));
+      if (!msgs.length || blank.length) {
+        console.error(
+          '[llm] this request has no usable content — llama.cpp will report ' +
+          '"no tokens to decode" and then abort. Blank/absent message(s):', blank,
+        );
+      }
+      if (ctx && chars / 4 > ctx) {
+        console.error(
+          `[llm] prompt is roughly ${Math.round(chars / 4)} tokens against n_ctx ${ctx}. ` +
+          'Overrunning the context is the other way into the empty-batch abort.',
+        );
+      }
+    }
 
     if (!onChunk) {
       return engine.instance.createChatCompletion({ ...options, stream: false });
