@@ -27,7 +27,7 @@ import { Dispatcher } from '../src/lib/dispatcher.js';
 import { ToolRegistry } from '../src/lib/toolRegistry.js';
 import { registerCoreTools } from '../src/lib/tools/index.js';
 import { resetTurnIds } from '../src/lib/turnContext.js';
-import { matchL0, normalize, CONTROL_LEXICON, WHATS_HERE_LEXICON, narrateWhatsHere, NOTHING_HERE } from '../src/lib/l0.js';
+import { matchL0, normalize, CONTROL_LEXICON, WHATS_HERE_LEXICON, DOTPAD_SYNC_LEXICON, narrateWhatsHere, NOTHING_HERE } from '../src/lib/l0.js';
 import { UNTRUSTED_PREAMBLE } from '../src/lib/untrusted.js';
 import { AudiomWorldAdapter, MemoryStore } from '../src/lib/adapters/audiomWorldAdapter.js';
 import { unsupported, CAPABILITIES } from '../src/lib/worldAdapter.js';
@@ -192,6 +192,11 @@ section('1. L0 matching is precision-first');
   check(matchL0('stop')?.command === 'stop', 'control words map to a command');
   check(matchL0('stop the announcement') === null, 'and "stop" as a prefix is not a control word');
   check(matchL0('') === null && matchL0(null) === null, 'an empty utterance matches nothing');
+  check(matchL0('Sync DOT Pad.')?.intent === 'dotpad_sync' && matchL0('sync')?.intent === 'dotpad_sync',
+    'DOT Pad sync phrasings map to intent dotpad_sync');
+  check(matchL0('sync my calendar') === null, 'and "sync" as a prefix is not a sync command');
+  check([...DOTPAD_SYNC_LEXICON].every((phrase) => normalize(phrase) === phrase),
+    'every sync phrasing is already normalized');
   check(
     [...WHATS_HERE_LEXICON].every((phrase) => normalize(phrase) === phrase),
     'every lexicon entry is already in normalized form, so a typo cannot make one unreachable',

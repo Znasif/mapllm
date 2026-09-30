@@ -244,6 +244,42 @@ section('inbound dispatch and the origin filter');
   check(errors.length === 1 && errors[0].message === 'boom', 'the throw is reported, not swallowed');
 }
 
+/* --------------------------------------------------------------- onPosition -- */
+
+section('onPosition — the stream the DOT Pad viewport mirror is built on');
+
+{
+  const { channel, transport } = makeChannel();
+  const got = [];
+  const off = channel.onPosition((pos) => got.push(pos));
+  check(INBOUND.POSITION_CHANGED === 'positionChanged', 'INBOUND.POSITION_CHANGED is Audiom\'s message name');
+
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: { position: [-73.9, 40.7] } });
+  check(eq(got, [[-73.9, 40.7]]), 'a positionChanged reaches onPosition as [lng, lat]');
+
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: { position: { lng: 1, lat: 2 } } });
+  check(eq(got[1], [1, 2]), 'an object position is normalised through toPosition');
+
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: { position: [NaN, 1] } });
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: {} });
+  check(got.length === 2, 'payloads without a finite position are dropped');
+
+  transport.emit({ type: INBOUND.STATE_CHANGED, payload: { position: [5, 6] } });
+  check(got.length === 2, 'stateChanged (a getState answer) is NOT a position event');
+
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: { position: [7, 8] } }, OTHER_ORIGIN);
+  check(got.length === 2, 'the origin filter applies');
+
+  off();
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: { position: [9, 9] } });
+  check(got.length === 2, 'unsubscribing stops delivery');
+
+  const seen = [];
+  channel.onMessage((type) => seen.push(type));
+  transport.emit({ type: INBOUND.POSITION_CHANGED, payload: { position: [3, 4] } });
+  check(eq(seen, [INBOUND.POSITION_CHANGED]), 'onMessage still sees positionChanged too');
+}
+
 /* ------------------------------------------------------------------ getState -- */
 
 section('getState');

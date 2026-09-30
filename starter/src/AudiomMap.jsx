@@ -49,6 +49,10 @@ function metersBetween(a, b) {
  *                exists. The seam M7/M13 drive `moveAvatar`, `executeCommand`
  *                and `route_to` mode `fly_me_there` through. Pass a stable
  *                callback: it is re-invoked whenever its identity changes.
+ *  - autoDrive : default true — the throttled `coordRef` interval drives the
+ *                avatar from the fingertip. DOT Pad mode passes false: there the
+ *                bridge (`hooks/useDotpadBridge.js`) owns every `moveAvatar`, so
+ *                sends stay on pin centres, rate-limited and echo-tracked.
  *  - onUtterance / speechPhrases / speechLang / allowCloudStt :
  *                milestone S. `onUtterance` receives any transcript L0 does not
  *                answer itself — the M7 dispatcher's entry point. `speechPhrases`
@@ -63,7 +67,7 @@ function metersBetween(a, b) {
 export function AudiomMap({
   mapId, sources, view, bbox, coordRef,
   throttleMs = 500, stepMeters = 0, onEvent, onStart, onBounds, onProbe,
-  syncKey = 0, syncView = false, fill = false,
+  syncKey = 0, syncView = false, fill = false, autoDrive = true,
   featureRef, onChannel,
   onUtterance, speechPhrases, speechLang = 'en-US', allowCloudStt = true,
 }) {
@@ -339,8 +343,10 @@ export function AudiomMap({
     return channel.onMessage(onMessage);
   }, [channel, src, onEvent, onStart, onBounds, onProbe]);
 
-  // Throttled avatar updates from the shared fingertip ref.
+  // Throttled avatar updates from the shared fingertip ref. Skipped entirely
+  // when `autoDrive` is off (DOT Pad mode drives the avatar itself).
   useEffect(() => {
+    if (!autoDrive) return undefined;
     const id = setInterval(() => {
       const coord = coordRef?.current;
       if (!channel || !readyRef.current || !coord ||
@@ -353,7 +359,7 @@ export function AudiomMap({
       if (channel.moveAvatar(coord)) lastSentRef.current = coord;
     }, throttleMs);
     return () => clearInterval(id);
-  }, [channel, throttleMs, coordRef, deadbandMeters]);
+  }, [channel, throttleMs, coordRef, deadbandMeters, autoDrive]);
 
   if (!AUDIOM_KEY) {
     return (
@@ -405,7 +411,14 @@ export function AudiomMap({
         ref={iframeRef}
         title="Audiom map"
         src={src}
-        allow="autoplay; fullscreen"
+        /*
+         * `bluetooth; serial`: Audiom's DOT Pad SDK connects over Web Bluetooth
+         * and Web Serial only (DotPadSDK-3.0.2.js:1458-1484; no WebUSB/WebHID),
+         * and a cross-origin iframe gets neither without this delegation.
+         * UNVERIFIED inside a `credentialless` frame — see
+         * docs/dotpad-camio-design.md R1.
+         */
+        allow="autoplay; fullscreen; bluetooth; serial"
         allowFullScreen
         /*
          * ⚠️ REQUIRED, and the page is blank without it.

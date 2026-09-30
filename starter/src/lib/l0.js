@@ -112,6 +112,27 @@ export const WHATS_HERE_LEXICON = Object.freeze(new Set([
   'what is it',
 ]));
 
+/**
+ * DOT Pad sync phrasings (`docs/dotpad-camio-design.md` §5). Voice is one of the
+ * two ways to sync while keyboard focus is inside the Audiom iframe, where the
+ * host's `S` key cannot hear it (R9). Whole utterances only, like the rest.
+ *
+ * Intent `dotpad_sync` is handled by the DOT Pad bridge (`useDotpadBridge`),
+ * which receives it through `onUtterance`; AudiomMic and the dispatcher only act
+ * on `control` and `whats_here`, so to them it falls through unchanged.
+ */
+export const DOTPAD_SYNC_LEXICON = Object.freeze(new Set([
+  'sync',
+  'resync',
+  're sync',
+  'sync dot pad',
+  'sync the dot pad',
+  'sync dotpad',
+  'sync the dotpad',
+  'sync pad',
+  'sync the pad',
+]));
+
 /** @typedef {{layer: 'L0', intent: string, command?: string}} L0Match */
 
 /**
@@ -126,6 +147,7 @@ export function matchL0(utterance) {
   const command = CONTROL_LEXICON[norm];
   if (command) return { layer: 'L0', intent: 'control', command };
   if (WHATS_HERE_LEXICON.has(norm)) return { layer: 'L0', intent: 'whats_here' };
+  if (DOTPAD_SYNC_LEXICON.has(norm)) return { layer: 'L0', intent: 'dotpad_sync' };
   return null;
 }
 

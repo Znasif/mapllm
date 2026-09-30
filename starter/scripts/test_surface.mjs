@@ -15,6 +15,7 @@ import {
   A4_LANDSCAPE,
   A4_LANDSCAPE_ARTWORK,
   BRAILLE_DOODLE,
+  DOTPAD,
   MONARCH,
   SURFACE_DESCRIPTORS,
   acuityCellCenter,
@@ -233,7 +234,7 @@ ok(contains(padOverride, TALL), 'explicit pad override still available for calle
 // ---------------------------------------------------------------------------
 group('createSurface — descriptors and guards');
 
-eq(Object.keys(SURFACE_DESCRIPTORS).length, 4, 'four ready-made descriptors');
+eq(Object.keys(SURFACE_DESCRIPTORS).length, 5, 'five ready-made descriptors');
 ok(Object.values(SURFACE_DESCRIPTORS).every((d) => {
   const s = createSurface(d);
   return s.acuityCellCount > 0 && s.materialAspect > 0;
@@ -256,6 +257,21 @@ const bezelled = createSurface({
 });
 eq(bezelled.acuityCols, 46, 'explicit widthMm overrides cols × pitch');
 eq(bezelled.deviceCols, 43, 'the device pin count is still reported');
+
+// ---------------------------------------------------------------------------
+group('DOT Pad — 60 × 40, and why its path must not use the acuity grid');
+
+const dotpad = createSurface(DOTPAD);
+eq(SURFACE_DESCRIPTORS.dotpad, DOTPAD, 'DOTPAD is registered under its id');
+eq(dotpad.deviceCols, 60, 'DOT Pad: 60 device columns');
+eq(dotpad.deviceRows, 40, 'DOT Pad: 40 device rows');
+eq(dotpad.devicePinPitchMm, 2.5, 'nominal 2.5 mm pitch (ASSUMED — measure a real pad)');
+eq(dotpad.refreshable, true, 'DOT Pad is refreshable');
+eq(dotpad.acuityCols, 60, 'at exactly 2.5 mm the acuity grid happens to equal the device grid…');
+const dotpad24 = createSurface({ ...DOTPAD, id: 'dotpad-2.4', pinPitchMm: 2.4 });
+ok(dotpad24.acuityCols === 57 && dotpad24.acuityRows === 38 && dotpad24.deviceCols === 60,
+   '…but a 2.4 mm pad would quietly shrink to 57 × 38 — so the DOT Pad path uses cols/rows directly',
+   `${dotpad24.acuityCols} × ${dotpad24.acuityRows}`);
 
 // ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`);

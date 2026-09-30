@@ -1,0 +1,11 @@
+{
+  "image": "dotpad.png",
+  "imageSize": [352, 292],
+  "cols": 60, "rows": 40, "pinPitchPx": 3.3335,
+  "pinCorners":    [[77.0, 57.34], [273.68, 57.34], [273.68, 187.35], [77.0, 187.35]],
+  "displayWindow": [[62.0, 42.5], [288.5, 42.5], [288.5, 202.5], [62.0, 202.5]],
+  "textWindow":    [[62.0, 248.5], [288.5, 248.5], [288.5, 269.5], [62.0, 269.5]],
+  "bezel":         [[50.0, 30.5], [300.5, 30.5], [300.5, 214.0], [50.0, 214.0]],
+  "maskPinField":  [[72.0, 52.3], [278.7, 52.3], [278.7, 192.4], [72.0, 192.4]],
+  "note": "Corner order TL,TR,BR,BL. pinCorners are corner-PIN CENTRES. maskPinField = pin field ± 1.5 pitch."
+}

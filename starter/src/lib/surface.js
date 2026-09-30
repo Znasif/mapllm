@@ -91,6 +91,29 @@ export const MONARCH = Object.freeze({
 });
 
 /**
+ * DOT Pad graphic area — 60 × 40 = 2,400 pins. The refreshable surface Audiom's
+ * own tactile renderer drives (`docs/dotpad-camio-design.md` §6.2).
+ *
+ * ⚠️ `pinPitchMm` is ASSUMED NOMINAL AND UNVERIFIED — measure a real pad with
+ * calipers. The `resources/dotpad.png` render proves only that the pitch is
+ * square; the finger → pin mapping depends only on the 59:39 corner-pin span.
+ *
+ * ⚠️ The DOT Pad path must use `cols`/`rows` DIRECTLY and never
+ * {@link acuityGrid}: `acuityGrid` takes `max(pitch, 2.5)`, so a pad that turns
+ * out to be 2.4 mm would quietly shrink to 57 × 38 and every pin index would be
+ * wrong against Audiom's fixed 60 × 40 window.
+ * @type {SurfaceDescriptor}
+ */
+export const DOTPAD = Object.freeze({
+  id: 'dotpad',
+  label: 'DOT Pad (60 × 40 graphic area)',
+  kind: 'refreshable',
+  cols: 60,
+  rows: 40,
+  pinPitchMm: 2.5,
+});
+
+/**
  * Pre-printed A4 in landscape, full sheet — 297 × 210 mm, no pins, so it gets the
  * 2.5 mm acuity floor: 118 × 84 = 9,912 cells.
  *
@@ -130,6 +153,7 @@ export const A4_LANDSCAPE_ARTWORK = Object.freeze({
 export const SURFACE_DESCRIPTORS = Object.freeze({
   [BRAILLE_DOODLE.id]: BRAILLE_DOODLE,
   [MONARCH.id]: MONARCH,
+  [DOTPAD.id]: DOTPAD,
   [A4_LANDSCAPE.id]: A4_LANDSCAPE,
   [A4_LANDSCAPE_ARTWORK.id]: A4_LANDSCAPE_ARTWORK,
 });

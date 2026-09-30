@@ -49,6 +49,15 @@ Genuinely end-to-end. `AudiomWorldAdapter` (Tier A) pulls real geometry from
 four-corner touch registers the physical material; the six core tools answer from
 cached geometry. Live-passed on map 885 (2,971 places, warm cache = 0 fetches).
 
+**DOT Pad mode (branch `dotpad`).** `AudiomTactileApp` now targets a DOT Pad
+instead of printed material: Audiom renders its own 60 × 40 tactile window onto
+the pad, and the host mirrors that window from `positionChanged`
+(`lib/dotpadViewport.js`), measures Audiom's pin lattice with a short grid-step
+probe plus a `smallerStep`/`largerStep` re-anchor (`lib/dotpadSync.js`), and sends
+the pin under the fingertip as `moveAvatar` — never for the 2-pin border band. No
+Audiom changes. Design, verified upstream facts and the test plan:
+`docs/dotpad-camio-design.md`.
+
 ### 1.2 The OSM pathway (`index.html` → `App`) — **redundant, not broken**
 
 Two facts, and the second one dissolves the first.

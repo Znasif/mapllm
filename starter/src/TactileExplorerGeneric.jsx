@@ -1,14 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import cv from '@techstark/opencv-js';
-import { uvToLngLat } from './audiom';
 import { openCameraStream } from './cameraDevices';
 import { createPointingTracker, pointingHint } from './gestureRecognizer';
 import { speak } from './lib/speak';
 import { createCornerCapture, CORNER_PROMPTS } from './lib/cornerRegistration';
+import {
+  DOTPAD_TEMPLATE, applyH, checkPinQuad, homography4, maskPolygons, orderQuad, resolveConfirmTouch, selectDevice,
+} from './lib/dotpadTemplate';
+import { DOTPAD_GEOMETRY } from './lib/dotpadViewport';
 
 const MEDIAPIPE_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const HAND_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+// DOT Pad pin field. Used DIRECTLY — never via surface.acuityGrid (§6.2).
+const PIN_COLS = DOTPAD_TEMPLATE.cols;
+const PIN_ROWS = DOTPAD_TEMPLATE.rows;
+const BAND = DOTPAD_GEOMETRY.o;
+
+// Hands-off windows (§6.3 / §6.4): how long MediaPipe must see no hand, and
+// the most we wait before going ahead anyway.
+const REF_HANDS_OFF_MS = 400;
+const REF_HANDS_OFF_MAX_MS = 4000;
+const FIND_HANDS_OFF_MS = 500;
+const FIND_HANDS_OFF_MAX_MS = 8000;
 
 function waitForOpenCV() {
   return new Promise((resolve) => {
@@ -47,102 +62,122 @@ const beep = () => {
   } catch { /* noop */ }
 };
 
+const cornerPrompt = (name) => `Point at the ${name} corner pin of the DOT Pad and hold.`;
+
 /**
- * Camera-driven pointer for a PRE-MADE physical tactile map of an Audiom map.
+ * Camera-driven pointer for a DOT Pad (docs/dotpad-camio-design.md §6).
  *
- * Register the material once by pointing at its 4 corners (MediaPipe + dwell);
- * the frame captured at the 4th corner becomes the AKAZE reference. Each frame
- * afterwards: live camera -> snapshot (AKAZE homography) -> (u,v) inside the 4
- * corners -> lat/lng inside `bbox`. No Mapbox, no pin generation.
+ * Registration, two ways, both ending in the same place:
+ *   - **Four corners [R]** (primary): point at the centre of each corner PIN
+ *     (TL → TR → BR → BL), dwell-locked by `createCornerCapture`, then
+ *     `checkPinQuad` sanity-checks the quad.
+ *   - **Auto-find [A]**: hands off, OpenCV finds candidate quads, and
+ *     `selectDevice` maps the template (`resources/dotpad_corners.json`) through
+ *     the display window. One touch on the top-left pin confirms orientation
+ *     when the braille text window was not seen.
+ * Either way the AKAZE reference is taken from a HANDS-OFF frame, with the pin
+ * field and text window masked out (they change state and hands cover them).
  *
- * Props: bbox [minLng,minLat,maxLng,maxLat], onCoord({lng,lat}|null).
+ * Each frame afterwards: live camera → snapshot (AKAZE homography) → (u, v) in
+ * the corner-pin square, emitted RAW through `onUv`. Pin quantization, the
+ * border band and every avatar move belong to `useDotpadBridge`.
+ *
+ * Props:
+ *  - onUv({u, v} | null)  every frame; null when no pointing hand is registered.
+ *  - avatarPin / fingerPin  [x, y] for the rectified panel (blue / yellow).
+ *  - pagesLabel             shown on the rectified panel.
+ *  - showRectPanel          the rectified pin-grid view.
+ *  - actionsRef             receives { register, autoFind, toggleFixed } so the
+ *                           sidebar buttons can drive this component.
+ *  - onRegistrationChange({ phase, isFixed })
+ *  - leadingControls        rendered first in the on-map control strip — the
+ *                           host puts Sync there so it is the first focusable
+ *                           element after the iframe (R9).
  */
 export function TactileExplorerGeneric({
-  bbox, onCoord, cols = 43, rows = 31, hysteresis = 0.3,
-  bboxAspect = null, materialAspect = null,
-  overlay = true, overlayOpacity = 0.55, overlayPct = 60, showRectPanel = false,
+  onUv, avatarPin = null, fingerPin = null, pagesLabel = '', showRectPanel = true,
+  actionsRef, onRegistrationChange, leadingControls = null,
 }) {
   const videoRef = useRef(null);
   const offRef = useRef(document.createElement('canvas')); // clean frame for AKAZE
   const debugRef = useRef(null);
-  const rectRef = useRef(null);   // rectified ("reverse projection") view
-  const rectOffRef = useRef(document.createElement('canvas')); // warp target, drawn twice
-  const ovRef = useRef(null);     // same rectification, overlaid on the embed
-  const ovWrapRef = useRef(null);
-  const overlayPctRef = useRef(overlayPct);
-  useEffect(() => { overlayPctRef.current = overlayPct; }, [overlayPct]);
-  const [ovSize, setOvSize] = useState(null); // reported px size of the box
-  const ovSizeRef = useRef(null);
+  const rectRef = useRef(null);   // rectified pin-grid view
+  const rectOffRef = useRef(document.createElement('canvas')); // warp target
   const runningRef = useRef(false);
 
-  const bboxRef = useRef(bbox);
-  useEffect(() => { bboxRef.current = bbox; }, [bbox]);
+  const onUvRef = useRef(onUv);
+  useEffect(() => { onUvRef.current = onUv; }, [onUv]);
+  const avatarPinRef = useRef(avatarPin);
+  useEffect(() => { avatarPinRef.current = avatarPin; }, [avatarPin]);
+  const fingerPinRef = useRef(fingerPin);
+  useEffect(() => { fingerPinRef.current = fingerPin; }, [fingerPin]);
+  const pagesLabelRef = useRef(pagesLabel);
+  useEffect(() => { pagesLabelRef.current = pagesLabel; }, [pagesLabel]);
 
-  // Quantization: the material has a real physical resolution (a fingertip can't
-  // resolve better than one pin), so snap (u,v) to the material's own grid and
-  // only emit when the cell changes. This is what keeps a state-sized map from
-  // firing a new feature announcement on every tremor — One-Euro smooths motion
-  // but cannot fix the map being denser than the sensor. Map-agnostic: the grid
-  // is a property of the material, not of the map.
-  const gridRef = useRef({ cols, rows, hysteresis });
-  useEffect(() => { gridRef.current = { cols, rows, hysteresis }; }, [cols, rows, hysteresis]);
-
-  // Letterbox: if the material's physical aspect differs from the map window's
-  // aspect, the printed artwork occupies only an inscribed sub-rectangle of the
-  // material. Map (u,v) through that sub-rectangle so the four corners you
-  // touched (the material's) still land correctly on the window's corners.
-  const bboxAspectRef = useRef(bboxAspect);
-  useEffect(() => { bboxAspectRef.current = bboxAspect; }, [bboxAspect]);
-
-  const fitRef = useRef({ fx: 1, fy: 1 });
-  useEffect(() => {
-    if (bboxAspect && materialAspect && Number.isFinite(bboxAspect) && Number.isFinite(materialAspect)) {
-      // fx/fy = fraction of the material occupied by the artwork on each axis
-      const fx = materialAspect > bboxAspect ? bboxAspect / materialAspect : 1;
-      const fy = materialAspect > bboxAspect ? 1 : materialAspect / bboxAspect;
-      fitRef.current = { fx, fy };
-    } else {
-      fitRef.current = { fx: 1, fy: 1 };
-    }
-  }, [bboxAspect, materialAspect]);
-  const cellRef = useRef(null); // last accepted { x, y }
-  const [cell, setCell] = useState(null);
-
-  const phaseRef = useRef('idle');       // 'idle' | 'capturing' | 'ready'
-  // Dwell state machine: [[x,y]TL,TR,BR,BL] in snapshot px, plus the hold
-  // timing. Shared with the OSM build (lib/cornerRegistration.js) and checked
+  // 'idle' | 'capturing' | 'handsoff' | 'autofind' | 'confirm' | 'ready'
+  const phaseRef = useRef('idle');
+  // Four-corner dwell state machine, shared with the OSM build and checked
   // headlessly by scripts/test_cornerRegistration.mjs.
   const captureRef = useRef(createCornerCapture());
+  // Auto-find's one-touch orientation confirm: first corner only.
+  const confirmRef = useRef(createCornerCapture());
+  // The registered corner-pin centres (snapshot px, TL,TR,BR,BL), and the ones
+  // waiting for a hands-off frame (or a confirm touch) before they count.
+  const cornersRef = useRef(null);
+  const pendingRef = useRef(null);
+  const handsOffRef = useRef(null); // { startedAt, zeroSince, minMs, maxMs, then }
   const isFixedRef = useRef(false);
 
   const s = useRef({
     hl: null, sift: null, bf: null,
-    kpTpl: null, descTpl: null,          // features of the captured snapshot
+    kpTpl: null, descTpl: null,          // features of the hands-off snapshot
     Hfwd: null, Hinv: null, HsnapToUv: null,
     bestInliers: 0, bestInliersAt: 0, tick: 0,
     oefX: makeOneEuroFilter(), oefY: makeOneEuroFilter(),
     pointTracker: null, wasPointing: false, lastHint: undefined,
+    lastUv: null,
   });
 
   const [status, setStatus] = useState('Initializing…');
   const [gestureHint, setGestureHint] = useState(null);
   const [attempt, setAttempt] = useState(0); // bump to retry camera/model init
   const [camInfo, setCamInfo] = useState(null);
-  const [phase, setPhase] = useState('idle');
-  const [coord, setCoord] = useState(null);
-  const [debugInfo, setDebugInfo] = useState({ good: 0, inliers: 0 });
+  const [phase, setPhaseState] = useState('idle');
+  const [debugInfo, setDebugInfo] = useState({ good: 0, inliers: 0, refKp: 0 });
   const [isFixed, setIsFixed] = useState(false);
+
+  const setPhase = (p) => { phaseRef.current = p; setPhaseState(p); };
+
+  useEffect(() => { onRegistrationChange?.({ phase, isFixed }); }, [phase, isFixed, onRegistrationChange]);
+
+  const clearTracking = () => {
+    const st = s.current;
+    st.HsnapToUv?.delete(); st.HsnapToUv = null;
+    st.Hfwd?.delete(); st.Hinv?.delete();
+    st.Hfwd = st.Hinv = null;
+    st.bestInliers = 0;
+    cornersRef.current = null;
+    pendingRef.current = null;
+    isFixedRef.current = false; setIsFixed(false);
+  };
 
   const startCapture = () => {
     captureRef.current.reset();
-    s.current.HsnapToUv?.delete(); s.current.HsnapToUv = null;
-    s.current.Hfwd?.delete(); s.current.Hinv?.delete();
-    s.current.Hfwd = s.current.Hinv = null;
-    s.current.bestInliers = 0;
-    isFixedRef.current = false; setIsFixed(false);
-    phaseRef.current = 'capturing'; setPhase('capturing');
-    setStatus('Registering material');
-    speak(`Point at the ${CORNER_PROMPTS[0]} corner and hold.`);
+    clearTracking();
+    setPhase('capturing');
+    setStatus('Registering DOT Pad corners');
+    speak(cornerPrompt(CORNER_PROMPTS[0]));
+  };
+
+  const startAutoFind = () => {
+    clearTracking();
+    handsOffRef.current = {
+      startedAt: performance.now(), zeroSince: null,
+      minMs: FIND_HANDS_OFF_MS, maxMs: FIND_HANDS_OFF_MAX_MS, then: 'find',
+    };
+    setPhase('autofind');
+    setStatus('Auto-find: hands off the pad');
+    speak('Take your hands off the DOT Pad.');
   };
 
   const toggleFixed = () => {
@@ -151,12 +186,17 @@ export function TactileExplorerGeneric({
     if (s.current.Hfwd && !s.current.Hfwd.empty()) setStatus(next ? 'Tracking (Fixed)' : 'Tracking');
   };
 
-  // Keyboard: ';' toggles Fix, 'r' re-registers (ignored while typing in a field).
+  if (actionsRef) actionsRef.current = { register: startCapture, autoFind: startAutoFind, toggleFixed };
+
+  // Keyboard: ';' Fix, 'r' register by corners, 'a' auto-find (ignored while
+  // typing in a field). Dead while focus is inside the Audiom iframe (R9).
   useEffect(() => {
     function onKey(e) {
       if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === ';' || e.code === 'Semicolon') { e.preventDefault(); toggleFixed(); }
       if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startCapture(); }
+      if (e.key === 'a' || e.key === 'A') { e.preventDefault(); startAutoFind(); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -166,30 +206,49 @@ export function TactileExplorerGeneric({
     const st = s.current;
     let cancelled = false;
 
-    function captureReference() {
+    /**
+     * Take the AKAZE reference from the CURRENT frame — called only once the
+     * hands are off — with the pin field and braille text window masked out
+     * (§6.3). The corners stay in snapshot pixels: the camera is static across
+     * the hands-off gap.
+     */
+    function captureReference(corners) {
       const off = offRef.current;
       const snap = cv.imread(off);
       const gray = new cv.Mat();
       cv.cvtColor(snap, gray, cv.COLOR_RGBA2GRAY); snap.delete();
+
+      const mask = new cv.Mat(gray.rows, gray.cols, cv.CV_8UC1, new cv.Scalar(255));
+      try {
+        const { pinField, textWindow } = maskPolygons(homography4(DOTPAD_TEMPLATE.pinCorners, corners));
+        for (const poly of [pinField, textWindow]) {
+          const pts = cv.matFromArray(4, 1, cv.CV_32SC2, poly.flat().map((n) => Math.round(n)));
+          cv.fillConvexPoly(mask, pts, new cv.Scalar(0));
+          pts.delete();
+        }
+      } catch (e) {
+        console.warn('[TactileExplorerGeneric] reference mask skipped:', e);
+      }
+
       st.kpTpl?.delete(); st.descTpl?.delete();
       st.kpTpl = new cv.KeyPointVector();
       st.descTpl = new cv.Mat();
-      const noMask = new cv.Mat();
-      st.sift.detectAndCompute(gray, noMask, st.kpTpl, st.descTpl);
-      noMask.delete(); gray.delete();
+      st.sift.detectAndCompute(gray, mask, st.kpTpl, st.descTpl);
+      mask.delete(); gray.delete();
 
-      const c = captureRef.current.corners;
+      const c = corners;
       const srcPx = cv.matFromArray(4, 1, cv.CV_32FC2,
         [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]]);
       const dstUv = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 1, 0, 1, 1, 0, 1]);
       st.HsnapToUv?.delete();
+      // (u, v) = (0,0)…(1,1) at the corner-pin CENTRES (D5).
       st.HsnapToUv = cv.getPerspectiveTransform(srcPx, dstUv);
       srcPx.delete(); dstUv.delete();
 
       // The snapshot IS the current frame, so snapshot->camera is the identity
       // right now. Seed it so tracking works the instant registration finishes,
       // rather than waiting for AKAZE to score 8+ inliers — which may never
-      // happen on a feature-poor material, leaving the tool apparently dead.
+      // happen on a feature-poor device, leaving the tool apparently dead.
       // NB: built with matFromArray, not cv.Mat.eye — that returns a MatExpr,
       // whose support in OpenCV.js is partial and can throw when handed to
       // perspectiveTransform (which would kill the render loop mid-registration).
@@ -198,6 +257,117 @@ export function TactileExplorerGeneric({
       st.Hfwd = I();
       st.Hinv = I();
       st.bestInliers = 0; st.bestInliersAt = 0;
+      cornersRef.current = corners.map((p) => [...p]);
+      setDebugInfo((d) => ({ ...d, refKp: st.kpTpl.size() }));
+    }
+
+    /**
+     * §6.4 step 1: candidate quads from Canny edges and Otsu in both polarities
+     * (the real pad's colours are unknown). Kept small here — the text window
+     * is well under 1% of a typical frame — and `selectDevice` applies the 1%
+     * floor to display-window hypotheses.
+     */
+    function detectQuads() {
+      const off = offRef.current;
+      const frame = cv.imread(off);
+      const gray = new cv.Mat();
+      cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY); frame.delete();
+      const blur = new cv.Mat();
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+      gray.delete();
+      const minArea = 0.0005 * off.width * off.height;
+      const quads = [];
+
+      const collect = (bin) => {
+        const contours = new cv.MatVector();
+        const hier = new cv.Mat();
+        cv.findContours(bin, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        for (let i = 0; i < contours.size() && quads.length < 80; i++) {
+          const cnt = contours.get(i);
+          if (cv.contourArea(cnt) >= minArea) {
+            const approx = new cv.Mat();
+            cv.approxPolyDP(cnt, approx, 0.02 * cv.arcLength(cnt, true), true);
+            if (approx.rows === 4 && cv.isContourConvex(approx)) {
+              const d = approx.data32S;
+              quads.push(orderQuad([[d[0], d[1]], [d[2], d[3]], [d[4], d[5]], [d[6], d[7]]]));
+            }
+            approx.delete();
+          }
+          cnt.delete();
+        }
+        contours.delete(); hier.delete();
+      };
+
+      const edges = new cv.Mat();
+      cv.Canny(blur, edges, 40, 120);
+      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+      cv.dilate(edges, edges, kernel);
+      kernel.delete();
+      collect(edges);
+      edges.delete();
+
+      const bin = new cv.Mat();
+      cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+      collect(bin);
+      cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+      collect(bin);
+      bin.delete(); blur.delete();
+      return quads;
+    }
+
+    function beginHandsOff(corners, now) {
+      pendingRef.current = corners;
+      handsOffRef.current = {
+        startedAt: now, zeroSince: null, minMs: REF_HANDS_OFF_MS, maxMs: REF_HANDS_OFF_MAX_MS, then: 'reference',
+      };
+      setPhase('handsoff');
+      setStatus('Lift your hand…');
+    }
+
+    /** True once MediaPipe has seen no hand for `minMs`, or `maxMs` has passed. */
+    function handsOffElapsed(handCount, now) {
+      const h = handsOffRef.current;
+      if (!h) return true;
+      if (handCount === 0) h.zeroSince ??= now;
+      else h.zeroSince = null;
+      return (h.zeroSince !== null && now - h.zeroSince >= h.minMs) || now - h.startedAt >= h.maxMs;
+    }
+
+    function finishReference() {
+      captureReference(pendingRef.current);
+      pendingRef.current = null;
+      handsOffRef.current = null;
+      setPhase('ready');
+      setStatus('Tracking');
+      speak('DOT Pad registered. Point at the pins.');
+    }
+
+    function runAutoFind() {
+      handsOffRef.current = null;
+      const off = offRef.current;
+      let found = null;
+      try {
+        found = selectDevice(detectQuads(), { width: off.width, height: off.height });
+      } catch (e) {
+        console.error('[TactileExplorerGeneric] auto-find failed:', e);
+      }
+      if (!found) {
+        setPhase('idle');
+        setStatus('DOT Pad not found — press R to register by corners');
+        speak("I couldn't find the DOT Pad. Press R to register it by its corners.");
+        return;
+      }
+      if (found.needsConfirm) {
+        pendingRef.current = found.pinCorners;
+        confirmRef.current.reset();
+        setPhase('confirm');
+        setStatus('Found — touch the top-left pin to confirm');
+        speak('Found the DOT Pad. Touch the top-left pin and hold.');
+        return;
+      }
+      // Text window seen: orientation is settled and the hands are already off.
+      pendingRef.current = found.pinCorners;
+      finishReference();
     }
 
     async function init() {
@@ -257,7 +427,7 @@ export function TactileExplorerGeneric({
         return;
       }
 
-      setStatus('Ready — press “Register material”.');
+      setStatus('Ready — press R (corners) or A (auto-find).');
       runningRef.current = true;
       requestAnimationFrame(loop);
     }
@@ -275,6 +445,12 @@ export function TactileExplorerGeneric({
       }
     }
 
+    /** Emit the fingertip (u, v), or null. The bridge ignores repeats of null cheaply. */
+    function emitUv(uv) {
+      st.lastUv = uv;
+      onUvRef.current?.(uv);
+    }
+
     function loopBody() {
       if (!runningRef.current || cancelled) return;
       const video = videoRef.current;
@@ -288,11 +464,12 @@ export function TactileExplorerGeneric({
 
       const now = performance.now();
       const result = st.hl.detectForVideo(video, now);
+      const handCount = result?.landmarks?.length ?? 0;
 
       // Require an actual pointing gesture, as camio-explorer does. Taking
       // landmarks[0][8] unconditionally meant a flat palm, a fist, or a hand
-      // reaching across the material all produced a confident cursor — and
-      // during corner capture could lock a dwell that was never a point.
+      // reaching across the pad all produced a confident cursor — and during
+      // corner capture could lock a dwell that was never a point.
       st.pointTracker ??= createPointingTracker();
       const gesture = st.pointTracker.update(result, now);
 
@@ -319,33 +496,77 @@ export function TactileExplorerGeneric({
         if (gesture.tooManyHandsPointing) speak('Point with only one hand.');
       }
 
-      // ── Corner capture ─────────────────────────────────────────────
-      if (phaseRef.current === 'capturing') {
+      const ph = phaseRef.current;
+
+      // ── Four-corner capture ─────────────────────────────────────────
+      if (ph === 'capturing') {
         const cap = captureRef.current.update(fx, fy, now);
         if (cap.locked) {
           beep();
           if (cap.complete) {
-            captureReference();
-            phaseRef.current = 'ready'; setPhase('ready');
-            setStatus('Tracking');
-            speak('Map registered. Move your finger on the map.');
+            const check = checkPinQuad(cap.corners);
+            if (!check.ok) {
+              captureRef.current.reset();
+              setStatus(`Corners rejected (${check.reason}) — again`);
+              speak(`Those corners don't look like the pin area — let's try again. ${cornerPrompt(CORNER_PROMPTS[0])}`);
+            } else {
+              beginHandsOff(cap.corners.map((p) => [...p]), now);
+              speak('Registered. Lift your hand for a moment.');
+            }
           } else {
-            speak(`Point at the ${cap.nextPrompt} corner and hold.`);
+            speak(cornerPrompt(cap.nextPrompt));
           }
         }
+        if (st.lastUv !== null) emitUv(null);
         drawDebug(fx, fy);
+        drawRectified(fx, fy);
+        requestAnimationFrame(loop);
+        return;
+      }
+
+      // ── Hands-off gaps: the reference frame, or the auto-find frame ──
+      if (ph === 'handsoff' || ph === 'autofind') {
+        if (handsOffElapsed(handCount, now)) {
+          if (handsOffRef.current?.then === 'find') runAutoFind();
+          else finishReference();
+        }
+        if (st.lastUv !== null) emitUv(null);
+        drawDebug(fx, fy);
+        drawRectified(fx, fy);
+        requestAnimationFrame(loop);
+        return;
+      }
+
+      // ── Auto-find orientation confirm: one dwell on the top-left pin ──
+      if (ph === 'confirm') {
+        const cap = confirmRef.current.update(fx, fy, now);
+        if (cap.locked) {
+          beep();
+          const resolved = resolveConfirmTouch(pendingRef.current, cap.corners[0]);
+          if (!resolved) {
+            speak("That wasn't near a corner pin. Let's register by the corners instead.");
+            startCapture();
+          } else {
+            beginHandsOff(resolved, now);
+            speak('Confirmed. Lift your hand for a moment.');
+          }
+        }
+        if (st.lastUv !== null) emitUv(null);
+        drawDebug(fx, fy);
+        drawRectified(fx, fy);
         requestAnimationFrame(loop);
         return;
       }
 
       // ── AKAZE match (every 6 frames) while tracking ────────────────
       st.tick += 1;
-      if (phaseRef.current === 'ready' && !isFixedRef.current && st.tick % 6 === 0 && st.descTpl?.rows > 0) {
+      if (ph === 'ready' && !isFixedRef.current && st.tick % 6 === 0 && st.descTpl?.rows > 0) {
         const frameMat = cv.imread(off);
         const frameGray = new cv.Mat();
         cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY); frameMat.delete();
         const kpFrame = new cv.KeyPointVector();
         const descFrame = new cv.Mat();
+        // Live frames stay unmasked; RANSAC handles the pins and the hand.
         const mask = new cv.Mat();
         st.sift.detectAndCompute(frameGray, mask, kpFrame, descFrame);
         mask.delete(); frameGray.delete();
@@ -372,7 +593,7 @@ export function TactileExplorerGeneric({
             const inliers = Hfwd && !Hfwd.empty() ? cv.countNonZero(inlierMask) : 0;
             srcPts.delete(); dstPts.delete(); inlierMask.delete();
 
-            setDebugInfo({ good: good.length, inliers });
+            setDebugInfo((d) => ({ ...d, good: good.length, inliers }));
             const stale = (now - st.bestInliersAt) > 7000;
             if (stale) st.bestInliers = 0;
             if (inliers >= 8 && inliers >= st.bestInliers) {
@@ -387,9 +608,9 @@ export function TactileExplorerGeneric({
         descFrame.delete(); kpFrame.delete();
       }
 
-      // ── Fingertip -> snapshot -> (u,v) -> lat/lng ──────────────────
-      let out = null;
-      if (fx !== null && st.Hinv && !st.Hinv.empty() && st.HsnapToUv && bboxRef.current) {
+      // ── Fingertip -> snapshot -> (u, v), raw ───────────────────────
+      let uv = null;
+      if (ph === 'ready' && fx !== null && st.Hinv && !st.Hinv.empty() && st.HsnapToUv) {
         const p0 = cv.matFromArray(1, 1, cv.CV_32FC2, [fx, fy]);
         const p1 = new cv.Mat();
         cv.perspectiveTransform(p0, p1, st.Hinv);
@@ -397,41 +618,9 @@ export function TactileExplorerGeneric({
         cv.perspectiveTransform(p1, p2, st.HsnapToUv);
         const u = p2.data32F[0], v = p2.data32F[1];
         p0.delete(); p1.delete(); p2.delete();
-        // Material (u,v) -> window (u,v): undo the letterbox margins.
-        // Aliased to lbx/lby: naming these fx/fy would shadow the fingertip
-        // fx/fy used above in this same block and throw a TDZ error.
-        const { fx: lbx, fy: lby } = fitRef.current;
-        const wu = (u - (1 - lbx) / 2) / lbx;
-        const wv = (v - (1 - lby) / 2) / lby;
-
-        if (wu >= -0.05 && wu <= 1.05 && wv >= -0.05 && wv <= 1.05) {
-          // NB: don't name these cu/cv — `cv` would shadow the OpenCV namespace
-          // inside this block, and fx/fy would shadow the fingertip above.
-          const su = Math.max(0, Math.min(1, wu));
-          const sv = Math.max(0, Math.min(1, wv));
-          const g = gridRef.current;
-          // Continuous cell coordinates, then per-axis hysteresis: keep the
-          // current cell until the finger crosses its boundary by a margin.
-          const gx = su * g.cols, gy = sv * g.rows;
-          const prev = cellRef.current;
-          const pick = (f, prevIdx, n) => {
-            const idx = Math.max(0, Math.min(n - 1, Math.floor(f)));
-            if (prevIdx == null) return idx;
-            return Math.abs(f - (prevIdx + 0.5)) > 0.5 + g.hysteresis ? idx : prevIdx;
-          };
-          const nx = pick(gx, prev?.x, g.cols);
-          const ny = pick(gy, prev?.y, g.rows);
-          if (!prev || prev.x !== nx || prev.y !== ny) {
-            cellRef.current = { x: nx, y: ny };
-            setCell({ x: nx, y: ny });
-          }
-          // Emit the centre of the snapped cell — stable, repeatable positions.
-          const c = cellRef.current;
-          out = uvToLngLat((c.x + 0.5) / g.cols, (c.y + 0.5) / g.rows, bboxRef.current);
-        }
+        if (Number.isFinite(u) && Number.isFinite(v)) uv = { u, v };
       }
-      if (!out) { cellRef.current = null; setCell(null); }
-      setCoord(out); onCoord?.(out);
+      if (uv || st.lastUv !== null) emitUv(uv);
 
       drawDebug(fx, fy);
       drawRectified(fx, fy);
@@ -439,148 +628,87 @@ export function TactileExplorerGeneric({
     }
 
     /**
-     * Reverse projection: warp the camera's view of the material into a
-     * synthetic rectangle at the WINDOW's aspect ratio — the equivalent of the
-     * OSM build warping onto the Mapbox canvas, but without needing a map.
-     *
-     * How to read it: the rectangle IS the Audiom window. If the printed map
-     * inside it looks stretched, cropped, or inset from the edges, the material
-     * and the window disagree — which is exactly the scaling mismatch that is
-     * otherwise invisible. The dashed box shows the artwork area implied by the
-     * material dimensions you entered.
+     * Reverse projection onto the DOT Pad's own pin grid: the camera view is
+     * warped so the four corner-pin centres land on the corner pin centres of a
+     * 60 × 40 grid. Then the pins are drawn over it — border band shaded,
+     * finger pin yellow, the mirrored avatar pin blue. Compare it with
+     * Audiom's TactilePinView (Display options) during development.
      */
     function drawRectified(fx, fy) {
       const panel = rectRef.current;
-      const ov = ovRef.current;
-      if (!panel && !ov) return;
-
-      const g = gridRef.current;
-      // GREEN rectangle == the Audiom window, sized by the aspect discovered
-      // from the map's own bounds. Nothing else is drawn in green.
-      const A = bboxAspectRef.current || 1.387;
-      const W = 320, H = Math.max(60, Math.round(W / A));
+      if (!panel) return;
+      const CELL = 6;
+      const W = PIN_COLS * CELL, H = PIN_ROWS * CELL;
       const off = rectOffRef.current;
+      if (off.width !== W || off.height !== H) { off.width = W; off.height = H; }
 
-      const registered = captureRef.current.corners.length >= 4
-        && st.Hfwd && !st.Hfwd.empty() && st.HsnapToUv;
-
-      if (!registered) {
-        if (off.width !== W || off.height !== H) { off.width = W; off.height = H; }
-        const c0 = off.getContext('2d');
-        c0.clearRect(0, 0, W, H);
-        c0.fillStyle = 'rgba(15,23,42,0.5)'; c0.fillRect(0, 0, W, H);
-        c0.textAlign = 'center';
-        c0.fillStyle = '#cbd5e1'; c0.font = '12px sans-serif';
-        c0.fillText('press “Register material”', W / 2, H / 2 - 4);
-        c0.fillStyle = '#94a3b8'; c0.font = '10px sans-serif';
-        c0.fillText('this box = the Audiom window', W / 2, H / 2 + 12);
-      } else {
-        const c = captureRef.current.corners;
+      const corners = cornersRef.current;
+      const registered = corners && st.Hfwd && !st.Hfwd.empty() && st.HsnapToUv;
+      if (registered) {
+        const c = corners;
         const snapPts = cv.matFromArray(4, 1, cv.CV_32FC2,
           [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]]);
         const camPts = new cv.Mat();
         cv.perspectiveTransform(snapPts, camPts, st.Hfwd); // snapshot -> live camera
         snapPts.delete();
-        const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H]);
+        const lo = CELL / 2, hiX = W - CELL / 2, hiY = H - CELL / 2;
+        const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [lo, lo, hiX, lo, hiX, hiY, lo, hiY]);
         const Hcr = cv.getPerspectiveTransform(camPts, dstPts);
         camPts.delete(); dstPts.delete();
-
         const frame = cv.imread(offRef.current);
         const warped = new cv.Mat();
         cv.warpPerspective(frame, warped, Hcr, new cv.Size(W, H), cv.INTER_LINEAR,
           cv.BORDER_CONSTANT, new cv.Scalar(15, 23, 42, 255));
         frame.delete(); Hcr.delete();
-        cv.imshow(off, warped);   // warp once, reuse for panel + overlay
+        cv.imshow(off, warped);
         warped.delete();
+      } else {
+        const c0 = off.getContext('2d');
+        c0.fillStyle = '#0f172a'; c0.fillRect(0, 0, W, H);
       }
 
-      // Fingertip in window space (computed once, drawn on both surfaces)
-      let uv = null;
-      if (registered && fx !== null && st.Hinv && !st.Hinv.empty()) {
-        const p0 = cv.matFromArray(1, 1, cv.CV_32FC2, [fx, fy]);
-        const p1 = new cv.Mat(); cv.perspectiveTransform(p0, p1, st.Hinv);
-        const p2 = new cv.Mat(); cv.perspectiveTransform(p1, p2, st.HsnapToUv);
-        uv = [p2.data32F[0], p2.data32F[1]];
-        p0.delete(); p1.delete(); p2.delete();
+      if (panel.width !== W || panel.height !== H) { panel.width = W; panel.height = H; }
+      const ctx = panel.getContext('2d');
+      ctx.drawImage(off, 0, 0);
+      ctx.fillStyle = 'rgba(15,23,42,0.35)'; ctx.fillRect(0, 0, W, H);
+
+      // Border band: the 2-pin frame Audiom pages from — never a send target.
+      ctx.fillStyle = 'rgba(234,88,12,0.28)';
+      ctx.fillRect(0, 0, W, BAND * CELL);
+      ctx.fillRect(0, H - BAND * CELL, W, BAND * CELL);
+      ctx.fillRect(0, BAND * CELL, BAND * CELL, H - 2 * BAND * CELL);
+      ctx.fillRect(W - BAND * CELL, BAND * CELL, BAND * CELL, H - 2 * BAND * CELL);
+
+      ctx.fillStyle = 'rgba(203,213,225,0.55)';
+      for (let x = 0; x < PIN_COLS; x++) {
+        for (let y = 0; y < PIN_ROWS; y++) ctx.fillRect(x * CELL + CELL / 2 - 0.75, y * CELL + CELL / 2 - 0.75, 1.5, 1.5);
       }
 
-      const cur = cellRef.current;
-      const { fx: lx, fy: ly } = fitRef.current;
-
-      const paint = (ctx, withGrid) => {
-        ctx.drawImage(off, 0, 0);
-
-        // ORANGE dashed = artwork area implied by the material dimensions
-        if (lx < 0.999 || ly < 0.999) {
-          ctx.strokeStyle = '#f97316'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
-          ctx.strokeRect(((1 - lx) / 2) * W, ((1 - ly) / 2) * H, lx * W, ly * H);
-          ctx.setLineDash([]);
-        }
-        if (withGrid) {
-          ctx.strokeStyle = 'rgba(148,163,184,0.25)'; ctx.lineWidth = 1;
-          ctx.beginPath();
-          for (let i = 1; i < g.cols; i++) { const x = (i / g.cols) * W; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
-          for (let j = 1; j < g.rows; j++) { const y = (j / g.rows) * H; ctx.moveTo(0, y); ctx.lineTo(W, y); }
-          ctx.stroke();
-        }
-        // YELLOW = where your finger is
-        if (cur) {
-          ctx.fillStyle = 'rgba(250,204,21,0.35)';
-          ctx.fillRect((cur.x / g.cols) * W, (cur.y / g.rows) * H, W / g.cols, H / g.rows);
-        }
-        if (uv) {
-          ctx.beginPath(); ctx.arc(uv[0] * W, uv[1] * H, 6, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(250,204,21,0.95)'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-          ctx.fill(); ctx.stroke();
-        }
-        // GREEN border + label: this is the window
-        ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 2;
-        ctx.strokeRect(1, 1, W - 2, H - 2);
-        ctx.fillStyle = 'rgba(34,197,94,0.9)';
-        ctx.fillRect(1, 1, 132, 14);
-        ctx.fillStyle = '#04210f'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left';
-        ctx.fillText(`Audiom window ${A.toFixed(3)}`, 5, 11);
-        if (ovSizeRef.current) {
-          ctx.fillStyle = 'rgba(34,197,94,0.9)';
-          ctx.fillRect(W - 92, 1, 91, 14);
-          ctx.fillStyle = '#04210f';
-          ctx.fillText(`${ovSizeRef.current.w}×${ovSizeRef.current.h} px`, W - 88, 11);
-        }
+      const pinBox = (p, fill, stroke) => {
+        ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 1.5;
+        ctx.fillRect(p[0] * CELL, p[1] * CELL, CELL, CELL);
+        ctx.strokeRect(p[0] * CELL + 0.5, p[1] * CELL + 0.5, CELL - 1, CELL - 1);
       };
+      const ap = avatarPinRef.current;
+      if (ap && ap[0] >= 0 && ap[0] < PIN_COLS && ap[1] >= 0 && ap[1] < PIN_ROWS) pinBox(ap, 'rgba(59,130,246,0.85)', '#bfdbfe');
+      const fp = fingerPinRef.current;
+      if (fp) pinBox(fp, 'rgba(250,204,21,0.8)', '#000');
 
-      if (panel) {
-        if (panel.width !== W || panel.height !== H) { panel.width = W; panel.height = H; }
-        paint(panel.getContext('2d'), true);
+      // The raw fingertip, continuous, for judging jitter against the pitch.
+      const uv = st.lastUv;
+      if (uv) {
+        ctx.beginPath();
+        ctx.arc(uv.u * (PIN_COLS - 1) * CELL + CELL / 2, uv.v * (PIN_ROWS - 1) * CELL + CELL / 2, 4, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(250,204,21,0.95)'; ctx.lineWidth = 1.5; ctx.stroke();
       }
-      if (ov) {
-        if (ov.width !== W || ov.height !== H) { ov.width = W; ov.height = H; }
-        const octx = ov.getContext('2d');
-        octx.clearRect(0, 0, W, H);
-        paint(octx, false); // no grid on the overlay — keeps the map readable
 
-        // Size the box in ACTUAL PIXELS, fitted to the panel. A percentage of
-        // panel width made a portrait window taller than the viewport, so its
-        // extent ran off-screen. At 100% it exactly fits the panel.
-        const wrap = ovWrapRef.current;
-        const parent = wrap?.parentElement;
-        if (wrap && parent) {
-          const pw = parent.clientWidth, ph = parent.clientHeight;
-          if (pw && ph) {
-            const fitW = Math.min(pw - 24, (ph - 24) * A);       // "contain"
-            const boxW = Math.max(120, Math.round(fitW * (overlayPctRef.current / 100)));
-            const boxH = Math.round(boxW / A);
-            if (wrap.style.width !== `${boxW}px`) {
-              wrap.style.width = `${boxW}px`;
-              wrap.style.height = `${boxH}px`;
-              ovSizeRef.current = { w: boxW, h: boxH };
-              setOvSize({ w: boxW, h: boxH });
-            }
-          }
-        }
-      }
+      ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left';
+      const label = registered ? `DOT Pad 60×40 ${pagesLabelRef.current || ''}` : 'press R (corners) or A (auto-find)';
+      ctx.fillStyle = 'rgba(15,23,42,0.8)'; ctx.fillRect(1, 1, ctx.measureText(label).width + 8, 13);
+      ctx.fillStyle = '#e2e8f0'; ctx.fillText(label, 5, 11);
     }
 
-    // Live camera thumbnail with captured corners + fingertip overlay.
+    // Live camera thumbnail with captured / predicted corners + fingertip.
     function drawDebug(fx, fy) {
       const dbg = debugRef.current;
       if (!dbg) return;
@@ -593,20 +721,55 @@ export function TactileExplorerGeneric({
       const sx = dw / vw, sy = dh / vh;
       ctx.drawImage(off, 0, 0, dw, dh);
 
-      // Deliberately no corner quad here — the ONE rectangle in the UI is the
-      // green bounding box on the map. Tracking health is the inliers count.
-      // During capture, show only small ticks for corners already locked in.
-      if (phaseRef.current === 'capturing') {
-        const corners = captureRef.current.corners;
-        ctx.fillStyle = 'rgba(250,204,21,0.9)';
-        corners.forEach(([x, y]) => {
-          ctx.beginPath(); ctx.arc(x * sx, y * sy, 3, 0, Math.PI * 2); ctx.fill();
-        });
+      const ph = phaseRef.current;
+      const dots = ph === 'capturing' ? captureRef.current.corners
+        : (ph === 'confirm' || ph === 'handsoff') ? (pendingRef.current || []) : [];
+      dots.forEach(([x, y], i) => {
+        ctx.beginPath(); ctx.arc(x * sx, y * sy, i === 0 && ph === 'confirm' ? 5 : 3, 0, Math.PI * 2);
+        ctx.fillStyle = i === 0 ? 'rgba(59,130,246,0.95)' : 'rgba(250,204,21,0.9)'; ctx.fill();
+      });
+
+      // The live homography, made visible: pin-space and template quads go
+      // snapshot → camera through Hfwd, so a bad match shows up as a box that
+      // no longer hugs the pad. Green = pin field (outer pin edges), orange
+      // dashed = the inner 56 × 36 send area, cyan = bezel + text line.
+      const corners = cornersRef.current;
+      if (ph === 'ready' && corners && st.Hfwd && !st.Hfwd.empty()) {
+        const d = st.Hfwd.data64F;
+        const Hf = [[d[0], d[1], d[2]], [d[3], d[4], d[5]], [d[6], d[7], d[8]]];
+        const last = [PIN_COLS - 1, PIN_ROWS - 1];
+        let Hpin = null, Htpl = null;
+        try {
+          Hpin = homography4([[0, 0], [last[0], 0], last, [0, last[1]]], corners);
+          Htpl = homography4(DOTPAD_TEMPLATE.pinCorners, corners);
+        } catch { /* degenerate corners — skip the overlay, keep the fingertip */ }
+        if (Hpin && Htpl) drawOutline(Hf, Hpin, Htpl);
       }
       if (fx !== null) {
         ctx.beginPath(); ctx.arc(fx * sx, fy * sy, 6, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(250,204,21,0.9)'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
         ctx.fill(); ctx.stroke();
+      }
+
+      function drawOutline(Hf, Hpin, Htpl) {
+        const last = [PIN_COLS - 1, PIN_ROWS - 1];
+        const toCam = (H, q) => q.map((p) => applyH(Hf, applyH(H, p))).map(([x, y]) => [x * sx, y * sy]);
+        const quad = (q, stroke, width, dash = []) => {
+          ctx.beginPath();
+          q.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+          ctx.closePath();
+          ctx.setLineDash(dash); ctx.strokeStyle = stroke; ctx.lineWidth = width; ctx.stroke();
+          ctx.setLineDash([]);
+        };
+        const rect = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+        quad(toCam(Htpl, DOTPAD_TEMPLATE.bezel), 'rgba(34,211,238,0.7)', 1);
+        quad(toCam(Htpl, DOTPAD_TEMPLATE.textWindow), 'rgba(34,211,238,0.7)', 1);
+        quad(toCam(Hpin, rect(-0.5, -0.5, last[0] + 0.5, last[1] + 0.5)), 'rgba(34,197,94,0.95)', 2);
+        quad(toCam(Hpin, rect(BAND - 0.5, BAND - 0.5, last[0] - BAND + 0.5, last[1] - BAND + 0.5)),
+          'rgba(234,88,12,0.9)', 1, [4, 3]);
+        const [tx, ty] = toCam(Hpin, [[0, 0]])[0]; // TL pin: orientation check
+        ctx.beginPath(); ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(59,130,246,0.95)'; ctx.fill();
       }
     }
 
@@ -622,10 +785,13 @@ export function TactileExplorerGeneric({
       st.Hfwd?.delete(); st.Hinv?.delete(); st.HsnapToUv?.delete();
       st.descTpl?.delete(); st.kpTpl?.delete(); st.sift?.delete(); st.bf?.delete();
       st.Hfwd = st.Hinv = st.HsnapToUv = st.descTpl = st.kpTpl = st.sift = st.bf = null;
+      onUvRef.current?.(null);
     };
   }, [attempt]);
 
-  const progress = phase === 'capturing' ? ` (${captureRef.current.index}/4 — ${CORNER_PROMPTS[Math.min(captureRef.current.index, 3)]})` : '';
+  const progress = phase === 'capturing'
+    ? ` (${captureRef.current.index}/4 — ${CORNER_PROMPTS[Math.min(captureRef.current.index, 3)]} pin)`
+    : '';
 
   return (
     <>
@@ -645,6 +811,7 @@ export function TactileExplorerGeneric({
       />
 
       <div className="tactile-controls-panel">
+        {leadingControls}
         {/Camera error|no frames/.test(status) && (
           <button
             type="button"
@@ -655,7 +822,10 @@ export function TactileExplorerGeneric({
           </button>
         )}
         <button type="button" className="tactile-fix-btn" onClick={startCapture}>
-          {phase === 'ready' ? '↻ Re-register [ r ]' : '🎯 Register material [ r ]'}
+          {phase === 'ready' ? '↻ Re-register corners [ r ]' : '🎯 Register corners [ r ]'}
+        </button>
+        <button type="button" className="tactile-fix-btn" onClick={startAutoFind}>
+          🔎 Auto-find pad [ a ]
         </button>
         <button
           type="button"
@@ -664,7 +834,7 @@ export function TactileExplorerGeneric({
           disabled={phase !== 'ready'}
           title={phase === 'ready'
             ? 'Freeze the current homography (press ; )'
-            : 'Register the material first — then Fix freezes the homography'}
+            : 'Register the DOT Pad first — then Fix freezes the homography'}
         >
           {isFixed ? '🔓 Unfix [ ; ]' : '🔒 Fix [ ; ]'}
         </button>
@@ -675,7 +845,7 @@ export function TactileExplorerGeneric({
           <span>
             {status}{progress}
             {camInfo ? ` · ${camInfo.w}×${camInfo.h} ${camInfo.state}` : ' · no camera yet'}
-            &nbsp;·&nbsp; good: {debugInfo.good} &nbsp;·&nbsp; inliers: {debugInfo.inliers}
+            &nbsp;·&nbsp; ref kp: {debugInfo.refKp} &nbsp;·&nbsp; good: {debugInfo.good} &nbsp;·&nbsp; inliers: {debugInfo.inliers}
             {gestureHint ? <>&nbsp;·&nbsp;<strong>{gestureHint}</strong></> : null}
           </span>
           <button
@@ -690,42 +860,22 @@ export function TactileExplorerGeneric({
         <canvas ref={debugRef} className="tactile-debug-canvas" />
       </div>
 
-      {/* Same rectification, laid over the Audiom map. pointer-events:none so
-          you can still drag/zoom the map underneath to line them up. */}
-      {overlay && (
-        <div
-          ref={ovWrapRef}
-          className="tactile-rect-overlay"
-          style={{ opacity: overlayOpacity }}
-        >
-          <canvas ref={ovRef} />
-        </div>
-      )}
-
-      {/* Same rectification as a side panel — redundant once the overlay is on,
-          but it adds the quantization grid and stays put while you pan the map. */}
+      {/* The rectified pin grid: the camera warped onto the DOT Pad's own 60×40
+          lattice, with the mirrored avatar (blue) and the finger (yellow). */}
       {showRectPanel && (
-      <div className="tactile-rect-panel">
-        <div className="tactile-debug-header">
-          <span>
-            rectified → window
-            {bboxAspect ? ` · window ${bboxAspect.toFixed(3)}` : ''}
-            {materialAspect ? ` · material ${materialAspect.toFixed(3)}` : ''}
-            {materialAspect && bboxAspect && Math.abs(materialAspect / bboxAspect - 1) > 0.01
-              ? ` · letterboxed ${(Math.max(1 - fitRef.current.fx, 1 - fitRef.current.fy) * 100).toFixed(0)}%`
-              : ''}
-          </span>
+        <div className="tactile-rect-panel">
+          <div className="tactile-debug-header">
+            <span>
+              pin grid 60×40
+              {fingerPin ? ` · finger ${fingerPin[0]},${fingerPin[1]}` : ''}
+              {avatarPin ? ` · avatar ${avatarPin[0]},${avatarPin[1]}` : ''}
+              {pagesLabel ? ` · ${pagesLabel}` : ''}
+            </span>
+          </div>
+          <canvas ref={rectRef} className="tactile-debug-canvas" />
         </div>
-        <canvas ref={rectRef} className="tactile-debug-canvas" />
-      </div>
       )}
 
-      {coord && (
-        <div className="tactile-coord-hud">
-          <div>Finger: {coord.lat.toFixed(6)},&thinsp;{coord.lng.toFixed(6)}</div>
-          {cell && <div style={{ fontSize: '0.85em', opacity: 0.8 }}>cell {cell.x},{cell.y} of {cols}×{rows}</div>}
-        </div>
-      )}
       {!status.startsWith('Tracking') && (
         <div className="tactile-status-hud">{status}{progress}</div>
       )}

@@ -9,7 +9,7 @@
  *   → { type: 'getState' }                                        initial sync
  *   → { type: 'moveAvatar',      payload: { position: [lng,lat] } }
  *   → { type: 'executeCommand',  payload: { command } }
- *   ← ready | stateChanged | featureEntered | featureSelected | error
+ *   ← ready | stateChanged | positionChanged | featureEntered | featureSelected | error
  *
  * The point of the channel, and the reason there is no path-narration code
  * anywhere near it: `route_to` mode `fly_me_there` DRIVES AUDIOM'S OWN AVATAR
@@ -56,6 +56,12 @@ export const OUTBOUND = Object.freeze({
 export const INBOUND = Object.freeze({
   READY: 'ready',
   STATE_CHANGED: 'stateChanged',
+  /**
+   * Fires for EVERY avatar position change — keyboard, pad, our own
+   * `moveAvatar`, jumps (a MobX reaction on `avatar.externalPosition`). The DOT
+   * Pad viewport mirror (`dotpadViewport.js`) is built on it.
+   */
+  POSITION_CHANGED: 'positionChanged',
   FEATURE_ENTERED: 'featureEntered',
   FEATURE_SELECTED: 'featureSelected',
   ERROR: 'error',
@@ -481,6 +487,22 @@ export function createAudiomChannel(options = {}) {
     onMessage(handler) {
       messageHandlers.add(handler);
       return () => messageHandlers.delete(handler);
+    },
+
+    /**
+     * Subscribe to avatar position changes. The handler gets a normalised
+     * `[lng, lat]`; payloads without a finite position are dropped.
+     * @param {(position: number[]) => void} handler
+     * @returns {() => void} Unsubscribe.
+     */
+    onPosition(handler) {
+      const listener = (type, payload) => {
+        if (type !== INBOUND.POSITION_CHANGED) return;
+        const position = toPosition(payload?.position);
+        if (position) handler(position);
+      };
+      messageHandlers.add(listener);
+      return () => messageHandlers.delete(listener);
     },
 
     /**
