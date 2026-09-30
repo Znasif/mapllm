@@ -1,0 +1,25 @@
+{
+  "note": "DOT Pad corner-PIN centres, TL,TR,BR,BL, in NATIVE image pixels of each JPEG (x right, y down, pixel centres at integers). TL = the pad's top-left pin when the braille text line is at the BOTTOM, so the order follows the pad, not the image. textSide = where the text line lies in the image. pitchPx = mean pin pitch near the field centre.",
+  "method": "Per corner: (1) a candidate 60x40 lattice was overlaid on 5-pin corner crops at native resolution, upscaled, and inspected by eye: the corner marker must sit on the extreme dot and every lattice position one or more pins outside the field (both directions) must be blank surface; this was checked for all 36 corners, including the washed-out left columns of the hue_handsoff frames. (2) The confirmed corner dot's centre was then measured INDEPENDENTLY of any lattice fit: grayscale, background = 30th percentile of a +/-1.2 pitch window, weights = max(0, I - bg) inside a 0.45 pitch disc, intensity-weighted centroid iterated 4x from the marker (python/cv2, native resolution). Expected measurement noise is ~0.02-0.05 pin; individual pins also wobble by up to ~0.1 pin, which this per-dot centroid includes and a lattice fit averages out.",
+  "split": "tune = hue_handsoff_*; held-out (never used to set parameters) = hue_oblique_*, PXL_*.",
+  "frames": {
+    "hue_handsoff_00.jpg": { "size": [1280, 720], "textSide": "bottom", "pitchPx": 7.1, "split": "tune",
+      "corners": [[484.10, 203.78], [911.59, 187.86], [910.21, 464.40], [500.76, 482.85]] },
+    "hue_handsoff_11.jpg": { "size": [1280, 720], "textSide": "bottom", "pitchPx": 7.1, "split": "tune",
+      "corners": [[484.09, 203.78], [911.55, 187.87], [910.19, 464.42], [500.69, 482.78]] },
+    "hue_oblique_00.jpg": { "size": [1280, 720], "textSide": "bottom", "pitchPx": 5.3, "split": "heldout",
+      "corners": [[556.36, 287.39], [860.37, 293.33], [875.81, 494.72], [547.38, 490.40]] },
+    "hue_oblique_05.jpg": { "size": [1280, 720], "textSide": "bottom", "pitchPx": 5.3, "split": "heldout",
+      "corners": [[556.40, 287.41], [860.35, 293.34], [875.80, 494.75], [547.29, 490.43]] },
+    "PXL_20260930_221956402.jpg": { "size": [3072, 4080], "textSide": "right", "pitchPx": 23.6, "split": "heldout",
+      "corners": [[793.02, 2095.69], [1361.77, 880.91], [2195.61, 1211.83], [1759.26, 2478.76]] },
+    "PXL_20260930_222009160.jpg": { "size": [3072, 4080], "textSide": "bottom", "pitchPx": 23.6, "split": "heldout",
+      "corners": [[1064.71, 1765.99], [2439.08, 1844.29], [2395.82, 2740.13], [1020.89, 2740.09]] },
+    "PXL_20260930_222012268.jpg": { "size": [3072, 4080], "textSide": "left", "pitchPx": 22.3, "split": "heldout",
+      "corners": [[2193.61, 1601.86], [2201.73, 2944.77], [1345.99, 2908.33], [1294.81, 1635.21]] },
+    "PXL_20260930_222014515.jpg": { "size": [3072, 4080], "textSide": "left", "pitchPx": 26.4, "split": "heldout",
+      "corners": [[2031.36, 1415.06], [2310.25, 2943.65], [1320.88, 3132.70], [977.59, 1640.24]] },
+    "PXL_20260930_222021634.jpg": { "size": [3072, 4080], "textSide": "bottom", "pitchPx": 22.5, "split": "heldout",
+      "corners": [[915.55, 1658.14], [2214.48, 1637.25], [2305.87, 2490.00], [935.39, 2566.95]] }
+  }
+}

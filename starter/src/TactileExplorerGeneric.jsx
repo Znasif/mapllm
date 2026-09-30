@@ -8,6 +8,7 @@ import {
   DOTPAD_TEMPLATE, applyH, checkPinQuad, homography4, maskPolygons, orderQuad, resolveConfirmTouch, selectDevice,
 } from './lib/dotpadTemplate';
 import { DOTPAD_GEOMETRY } from './lib/dotpadViewport';
+import { aggregateDetections, detectDotpadLattice, latticeSearch, rgbaToGray } from './lib/dotpadLattice';
 
 const MEDIAPIPE_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const HAND_MODEL_URL =
@@ -24,6 +25,13 @@ const REF_HANDS_OFF_MS = 400;
 const REF_HANDS_OFF_MAX_MS = 4000;
 const FIND_HANDS_OFF_MS = 500;
 const FIND_HANDS_OFF_MAX_MS = 8000;
+// Lattice auto-find (lib/dotpadLattice.js): one hands-off frame per animation
+// tick until FIND_FRAMES detections agree, capped by attempts and time; a scan
+// that finds nothing in its first FIND_GIVE_UP frames stops early.
+const FIND_FRAMES = 5;
+const FIND_MAX_ATTEMPTS = 10;
+const FIND_MAX_MS = 6000;
+const FIND_GIVE_UP = 3;
 
 function waitForOpenCV() {
   return new Promise((resolve) => {
@@ -71,10 +79,13 @@ const cornerPrompt = (name) => `Point at the ${name} corner pin of the DOT Pad a
  *   - **Four corners [R]** (primary): point at the centre of each corner PIN
  *     (TL → TR → BR → BL), dwell-locked by `createCornerCapture`, then
  *     `checkPinQuad` sanity-checks the quad.
- *   - **Auto-find [A]**: hands off, OpenCV finds candidate quads, and
- *     `selectDevice` maps the template (`resources/dotpad_corners.json`) through
- *     the display window. One touch on the top-left pin confirms orientation
- *     when the braille text window was not seen.
+ *   - **Auto-find [A]**: hands off, then `detectDotpadLattice` finds the 60 × 40
+ *     pin lattice itself in several hands-off frames (one per tick) and
+ *     `aggregateDetections` takes the median corners; the braille text line
+ *     settles which corner is top-left. If the lattice is not found, the older
+ *     display-window quad search (`selectDevice`) is tried on the last frame.
+ *     One touch on the top-left pin confirms orientation when the text line
+ *     was not seen.
  * Either way the AKAZE reference is taken from a HANDS-OFF frame, with the pin
  * field and text window masked out (they change state and hands cover them).
  *
@@ -126,6 +137,7 @@ export function TactileExplorerGeneric({
   const cornersRef = useRef(null);
   const pendingRef = useRef(null);
   const handsOffRef = useRef(null); // { startedAt, zeroSince, minMs, maxMs, then }
+  const findRef = useRef(null);     // lattice scan: { startedAt, attempts, results, pitchHint, search }
   const isFixedRef = useRef(false);
 
   const s = useRef({
@@ -158,6 +170,7 @@ export function TactileExplorerGeneric({
     st.bestInliers = 0;
     cornersRef.current = null;
     pendingRef.current = null;
+    findRef.current = null;
     isFixedRef.current = false; setIsFixed(false);
   };
 
@@ -342,14 +355,75 @@ export function TactileExplorerGeneric({
       speak('DOT Pad registered. Point at the pins.');
     }
 
-    function runAutoFind() {
+    /** Hands are off: start scanning frames for the pin lattice. */
+    function beginLatticeScan(now) {
+      handsOffRef.current = null;
+      findRef.current = { startedAt: now, attempts: 0, results: [], pitchHint: null, search: null };
+      setStatus('Auto-find: looking for the pins…');
+    }
+
+    /**
+     * One step of the lattice scan per tick. A hands-off frame is grabbed and
+     * its search (`latticeSearch`, a generator) advanced one scale hypothesis
+     * per tick, so a frame's worth of work never stalls the render loop. When
+     * enough frames agree, or the attempt / time budget is spent, aggregate
+     * and hand over to `runAutoFind`.
+     */
+    function scanLatticeFrame(handCount, now) {
+      const f = findRef.current;
+      if (!f.search && handCount === 0) {
+        const off = offRef.current;
+        const { width: w, height: h } = off;
+        const rgba = off.getContext('2d').getImageData(0, 0, w, h).data;
+        f.search = latticeSearch({ data: rgbaToGray(rgba, w, h), width: w, height: h }, { pitchHint: f.pitchHint });
+      }
+      if (f.search) {
+        let st;
+        try {
+          st = f.search.next();
+        } catch (e) {
+          console.error('[TactileExplorerGeneric] lattice detection failed:', e);
+          st = { done: true, value: null };
+        }
+        if (st.done) {
+          f.search = null;
+          f.attempts += 1;
+          if (st.value) { f.results.push(st.value); f.pitchHint = st.value.pitchPx; }
+          (f.log ??= []).push(st.value
+            ? { pitch: +st.value.pitchPx.toFixed(2), textFound: st.value.textFound, text: st.value.text }
+            : { fail: detectDotpadLattice.lastReason || 'no lattice' });
+          setStatus(`Auto-find: looking for the pins (${f.results.length}/${FIND_FRAMES})…`);
+        }
+      }
+      const done = !f.search && (f.results.length >= FIND_FRAMES || f.attempts >= FIND_MAX_ATTEMPTS
+        || now - f.startedAt >= FIND_MAX_MS || (f.attempts >= FIND_GIVE_UP && f.results.length === 0));
+      if (!done) return;
+      findRef.current = null;
+      const agg = aggregateDetections(f.results);
+      // Always log, per frame: which path ran and why orientation did or didn't settle.
+      console.info('[TactileExplorerGeneric] lattice auto-find:', agg ? {
+        frames: agg.frames, agreed: agg.agreed, spreadPx: +agg.spreadPx.toFixed(2),
+        pitchPx: +agg.pitchPx.toFixed(2), textFound: agg.textFound,
+      } : 'no lattice — falling back to the outline search', f.log || []);
+      runAutoFind(agg, agg ? 'pins' : 'outline');
+    }
+
+    /**
+     * Act on an auto-find result: the aggregated lattice detection, or — when
+     * the lattice was not found — the display-window quad search on the current
+     * frame (§6.4; it needs no visible pins, so it can still help when the pin
+     * field is washed out or blank).
+     */
+    function runAutoFind(latticeFound = null, via = 'outline') {
       handsOffRef.current = null;
       const off = offRef.current;
-      let found = null;
-      try {
-        found = selectDevice(detectQuads(), { width: off.width, height: off.height });
-      } catch (e) {
-        console.error('[TactileExplorerGeneric] auto-find failed:', e);
+      let found = latticeFound;
+      if (!found) {
+        try {
+          found = selectDevice(detectQuads(), { width: off.width, height: off.height });
+        } catch (e) {
+          console.error('[TactileExplorerGeneric] auto-find failed:', e);
+        }
       }
       if (!found) {
         setPhase('idle');
@@ -361,7 +435,9 @@ export function TactileExplorerGeneric({
         pendingRef.current = found.pinCorners;
         confirmRef.current.reset();
         setPhase('confirm');
-        setStatus('Found — touch the top-left pin to confirm');
+        setStatus(via === 'pins'
+          ? 'Found the pins, but not which way up (text line not seen) — touch the top-left pin'
+          : 'Found the outline only (pins not detected) — touch the top-left pin');
         speak('Found the DOT Pad. Touch the top-left pin and hold.');
         return;
       }
@@ -524,10 +600,11 @@ export function TactileExplorerGeneric({
         return;
       }
 
-      // ── Hands-off gaps: the reference frame, or the auto-find frame ──
+      // ── Hands-off gaps: the reference frame, or the auto-find scan ──
       if (ph === 'handsoff' || ph === 'autofind') {
-        if (handsOffElapsed(handCount, now)) {
-          if (handsOffRef.current?.then === 'find') runAutoFind();
+        if (findRef.current) scanLatticeFrame(handCount, now);
+        else if (handsOffElapsed(handCount, now)) {
+          if (handsOffRef.current?.then === 'find') beginLatticeScan(now);
           else finishReference();
         }
         if (st.lastUv !== null) emitUv(null);
@@ -628,41 +705,59 @@ export function TactileExplorerGeneric({
     }
 
     /**
-     * Reverse projection onto the DOT Pad's own pin grid: the camera view is
-     * warped so the four corner-pin centres land on the corner pin centres of a
-     * 60 × 40 grid. Then the pins are drawn over it — border band shaded,
-     * finger pin yellow, the mirrored avatar pin blue. Compare it with
-     * Audiom's TactilePinView (Display options) during development.
+     * Reverse projection into the TEMPLATE's own frame (dotpad.png pixels × S):
+     * the live camera is warped through template → snapshot (corner pins) →
+     * camera (Hfwd), so the whole device lands where dotpad.png draws it. Over
+     * it: bezel + text line (cyan), display window (purple), pin-field edge
+     * (green), inner 56 × 36 send area (orange dashed) and all 2,400 predicted
+     * pin centres. Real dots sitting on the predicted ones = good registration.
+     * Finger pin yellow, mirrored avatar pin blue.
      */
     function drawRectified(fx, fy) {
       const panel = rectRef.current;
       if (!panel) return;
-      const CELL = 6;
-      const W = PIN_COLS * CELL, H = PIN_ROWS * CELL;
+      const T = DOTPAD_TEMPLATE;
+      const S = 2;
+      const W = T.imageSize[0] * S, H = T.imageSize[1] * S;
       const off = rectOffRef.current;
       if (off.width !== W || off.height !== H) { off.width = W; off.height = H; }
 
+      const [TL, TR, , BL] = T.pinCorners;
+      const px = (TR[0] - TL[0]) / (PIN_COLS - 1), py = (BL[1] - TL[1]) / (PIN_ROWS - 1);
+      const pinXY = (i, j) => [(TL[0] + i * px) * S, (TL[1] + j * py) * S];
+
       const corners = cornersRef.current;
       const registered = corners && st.Hfwd && !st.Hfwd.empty() && st.HsnapToUv;
-      if (registered) {
-        const c = corners;
-        const snapPts = cv.matFromArray(4, 1, cv.CV_32FC2,
-          [c[0][0], c[0][1], c[1][0], c[1][1], c[2][0], c[2][1], c[3][0], c[3][1]]);
-        const camPts = new cv.Mat();
-        cv.perspectiveTransform(snapPts, camPts, st.Hfwd); // snapshot -> live camera
-        snapPts.delete();
-        const lo = CELL / 2, hiX = W - CELL / 2, hiY = H - CELL / 2;
-        const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [lo, lo, hiX, lo, hiX, hiY, lo, hiY]);
-        const Hcr = cv.getPerspectiveTransform(camPts, dstPts);
-        camPts.delete(); dstPts.delete();
-        const frame = cv.imread(offRef.current);
-        const warped = new cv.Mat();
-        cv.warpPerspective(frame, warped, Hcr, new cv.Size(W, H), cv.INTER_LINEAR,
-          cv.BORDER_CONSTANT, new cv.Scalar(15, 23, 42, 255));
-        frame.delete(); Hcr.delete();
-        cv.imshow(off, warped);
-        warped.delete();
-      } else {
+      // Before registration completes (auto-find confirm / hands-off wait) the
+      // predicted corners are already in LIVE camera px, so warp with them
+      // directly (Hf = identity) — lets you judge the fit before confirming.
+      const ph = phaseRef.current;
+      const pending = (ph === 'confirm' || ph === 'handsoff') ? pendingRef.current : null;
+      const src = registered ? corners : (pending && pending.length === 4 ? pending : null);
+      let drawn = false;
+      if (src) {
+        let Htpl = null;
+        try { Htpl = homography4(T.pinCorners, src); } catch { /* degenerate */ }
+        if (Htpl) {
+          const d = registered ? st.Hfwd.data64F : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+          const Hf = [[d[0], d[1], d[2]], [d[3], d[4], d[5]], [d[6], d[7], d[8]]];
+          const tq = [[0, 0], [T.imageSize[0], 0], T.imageSize, [0, T.imageSize[1]]];
+          const cam = tq.map((p) => applyH(Hf, applyH(Htpl, p)));
+          const camPts = cv.matFromArray(4, 1, cv.CV_32FC2, cam.flat());
+          const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H]);
+          const Hcr = cv.getPerspectiveTransform(camPts, dstPts);
+          camPts.delete(); dstPts.delete();
+          const frame = cv.imread(offRef.current);
+          const warped = new cv.Mat();
+          cv.warpPerspective(frame, warped, Hcr, new cv.Size(W, H), cv.INTER_LINEAR,
+            cv.BORDER_CONSTANT, new cv.Scalar(15, 23, 42, 255));
+          frame.delete(); Hcr.delete();
+          cv.imshow(off, warped);
+          warped.delete();
+          drawn = true;
+        }
+      }
+      if (!drawn) {
         const c0 = off.getContext('2d');
         c0.fillStyle = '#0f172a'; c0.fillRect(0, 0, W, H);
       }
@@ -670,42 +765,60 @@ export function TactileExplorerGeneric({
       if (panel.width !== W || panel.height !== H) { panel.width = W; panel.height = H; }
       const ctx = panel.getContext('2d');
       ctx.drawImage(off, 0, 0);
-      ctx.fillStyle = 'rgba(15,23,42,0.35)'; ctx.fillRect(0, 0, W, H);
 
-      // Border band: the 2-pin frame Audiom pages from — never a send target.
-      ctx.fillStyle = 'rgba(234,88,12,0.28)';
-      ctx.fillRect(0, 0, W, BAND * CELL);
-      ctx.fillRect(0, H - BAND * CELL, W, BAND * CELL);
-      ctx.fillRect(0, BAND * CELL, BAND * CELL, H - 2 * BAND * CELL);
-      ctx.fillRect(W - BAND * CELL, BAND * CELL, BAND * CELL, H - 2 * BAND * CELL);
+      const quad = (q, stroke, width, dash = []) => {
+        ctx.beginPath();
+        q.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.closePath();
+        ctx.setLineDash(dash); ctx.strokeStyle = stroke; ctx.lineWidth = width; ctx.stroke();
+        ctx.setLineDash([]);
+      };
+      const scaled = (q) => q.map(([x, y]) => [x * S, y * S]);
+      const pinRect = (i0, j0, i1, j1) => {
+        const [x0, y0] = pinXY(i0, j0), [x1, y1] = pinXY(i1, j1);
+        return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+      };
+      quad(scaled(T.bezel), 'rgba(34,211,238,0.8)', 1);
+      quad(scaled(T.textWindow), 'rgba(34,211,238,0.8)', 1);
+      quad(scaled(T.displayWindow), 'rgba(168,85,247,0.85)', 1);
+      quad(pinRect(-0.5, -0.5, PIN_COLS - 0.5, PIN_ROWS - 0.5), 'rgba(34,197,94,0.95)', 1.5);
+      quad(pinRect(BAND - 0.5, BAND - 0.5, PIN_COLS - 1 - BAND + 0.5, PIN_ROWS - 1 - BAND + 0.5),
+        'rgba(234,88,12,0.9)', 1, [4, 3]);
 
-      ctx.fillStyle = 'rgba(203,213,225,0.55)';
-      for (let x = 0; x < PIN_COLS; x++) {
-        for (let y = 0; y < PIN_ROWS; y++) ctx.fillRect(x * CELL + CELL / 2 - 0.75, y * CELL + CELL / 2 - 0.75, 1.5, 1.5);
+      // Predicted pin centres: red inside, orange in the 2-pin border band.
+      for (let i = 0; i < PIN_COLS; i++) {
+        for (let j = 0; j < PIN_ROWS; j++) {
+          const inBand = i < BAND || j < BAND || i > PIN_COLS - 1 - BAND || j > PIN_ROWS - 1 - BAND;
+          const [x, y] = pinXY(i, j);
+          ctx.fillStyle = inBand ? 'rgba(249,115,22,0.9)' : 'rgba(239,68,68,0.9)';
+          ctx.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
+        }
       }
 
       const pinBox = (p, fill, stroke) => {
+        const q = pinRect(p[0] - 0.5, p[1] - 0.5, p[0] + 0.5, p[1] + 0.5);
         ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 1.5;
-        ctx.fillRect(p[0] * CELL, p[1] * CELL, CELL, CELL);
-        ctx.strokeRect(p[0] * CELL + 0.5, p[1] * CELL + 0.5, CELL - 1, CELL - 1);
+        ctx.fillRect(q[0][0], q[0][1], q[1][0] - q[0][0], q[2][1] - q[0][1]);
+        ctx.strokeRect(q[0][0], q[0][1], q[1][0] - q[0][0], q[2][1] - q[0][1]);
       };
       const ap = avatarPinRef.current;
-      if (ap && ap[0] >= 0 && ap[0] < PIN_COLS && ap[1] >= 0 && ap[1] < PIN_ROWS) pinBox(ap, 'rgba(59,130,246,0.85)', '#bfdbfe');
+      if (ap && ap[0] >= 0 && ap[0] < PIN_COLS && ap[1] >= 0 && ap[1] < PIN_ROWS) pinBox(ap, 'rgba(59,130,246,0.6)', '#bfdbfe');
       const fp = fingerPinRef.current;
-      if (fp) pinBox(fp, 'rgba(250,204,21,0.8)', '#000');
+      if (fp) pinBox(fp, 'rgba(250,204,21,0.6)', '#000');
 
       // The raw fingertip, continuous, for judging jitter against the pitch.
       const uv = st.lastUv;
       if (uv) {
-        ctx.beginPath();
-        ctx.arc(uv.u * (PIN_COLS - 1) * CELL + CELL / 2, uv.v * (PIN_ROWS - 1) * CELL + CELL / 2, 4, 0, Math.PI * 2);
+        const [x, y] = pinXY(uv.u * (PIN_COLS - 1), uv.v * (PIN_ROWS - 1));
+        ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(250,204,21,0.95)'; ctx.lineWidth = 1.5; ctx.stroke();
       }
 
-      ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left';
-      const label = registered ? `DOT Pad 60×40 ${pagesLabelRef.current || ''}` : 'press R (corners) or A (auto-find)';
-      ctx.fillStyle = 'rgba(15,23,42,0.8)'; ctx.fillRect(1, 1, ctx.measureText(label).width + 8, 13);
-      ctx.fillStyle = '#e2e8f0'; ctx.fillText(label, 5, 11);
+      ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left';
+      const label = registered ? `DOT Pad 60×40 ${pagesLabelRef.current || ''}`
+        : drawn ? 'preview — not registered yet' : 'press R (corners) or A (auto-find)';
+      ctx.fillStyle = 'rgba(15,23,42,0.8)'; ctx.fillRect(2, 2, ctx.measureText(label).width + 12, 22);
+      ctx.fillStyle = '#e2e8f0'; ctx.fillText(label, 8, 19);
     }
 
     // Live camera thumbnail with captured / predicted corners + fingertip.
@@ -723,7 +836,8 @@ export function TactileExplorerGeneric({
 
       const ph = phaseRef.current;
       const dots = ph === 'capturing' ? captureRef.current.corners
-        : (ph === 'confirm' || ph === 'handsoff') ? (pendingRef.current || []) : [];
+        : (ph === 'confirm' || ph === 'handsoff') ? (pendingRef.current || [])
+          : ph === 'autofind' ? (findRef.current?.results.at(-1)?.pinCorners || []) : [];
       dots.forEach(([x, y], i) => {
         ctx.beginPath(); ctx.arc(x * sx, y * sy, i === 0 && ph === 'confirm' ? 5 : 3, 0, Math.PI * 2);
         ctx.fillStyle = i === 0 ? 'rgba(59,130,246,0.95)' : 'rgba(250,204,21,0.9)'; ctx.fill();
@@ -866,7 +980,7 @@ export function TactileExplorerGeneric({
         <div className="tactile-rect-panel">
           <div className="tactile-debug-header">
             <span>
-              pin grid 60×40
+              template view · pin grid 60×40
               {fingerPin ? ` · finger ${fingerPin[0]},${fingerPin[1]}` : ''}
               {avatarPin ? ` · avatar ${avatarPin[0]},${avatarPin[1]}` : ''}
               {pagesLabel ? ` · ${pagesLabel}` : ''}
