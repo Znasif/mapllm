@@ -327,11 +327,44 @@ export class LocalLLMClient {
    */
   async embed(texts, { model = TIER.EMBED, signal } = {}) {
     if (!texts.length) return [];
-    const json = await this.transport.embeddings({ model, input: texts }, { signal });
-    // The server returns results with an `index` field; do not assume order.
+    const json = await this.transport.embeddings(
+      // `float` is requested EXPLICITLY. The OpenAI embeddings contract also
+      // allows base64, and `Float32Array.from(aBase64String)` does not throw —
+      // it iterates the characters and yields all-NaN. NaN scores leave
+      // `sort` order untouched, so retrieval silently degrades to "whatever
+      // came first in the corpus" while every count still looks healthy.
+      { model, input: texts, encoding_format: 'float' },
+      { signal },
+    );
+
+    // Fail LOUDLY on a short or malformed batch. This used to write into a
+    // sparse array and return `undefined` holes: the index built, the counts
+    // looked right, and only the first few places had real vectors — which is
+    // exactly the failure that produced L1 recall 0/15 while tool selection
+    // still scored 70%. A retrieval layer that is wrong must not look fine.
+    const rows = json?.data;
+    if (!Array.isArray(rows) || rows.length !== texts.length) {
+      throw new Error(
+        `embed: expected ${texts.length} embeddings, got ${Array.isArray(rows) ? rows.length : typeof rows}`,
+      );
+    }
+
     const out = new Array(texts.length);
-    for (const row of json.data) {
-      out[row.index ?? json.data.indexOf(row)] = normalise(Float32Array.from(row.embedding));
+    for (const row of rows) {
+      const at = row.index ?? rows.indexOf(row);
+      const raw = row.embedding;
+      if (!Array.isArray(raw) && !ArrayBuffer.isView(raw)) {
+        throw new Error(`embed: embedding ${at} is ${typeof raw}, not a numeric array`
+          + ' — the backend may be returning base64');
+      }
+      const vec = Float32Array.from(raw);
+      if (!vec.length || !Number.isFinite(vec[0])) {
+        throw new Error(`embed: embedding ${at} is empty or non-finite (dim=${vec.length})`);
+      }
+      out[at] = normalise(vec);
+    }
+    if (out.some((v) => !v)) {
+      throw new Error('embed: backend returned duplicate or out-of-range indices');
     }
     return out;
   }

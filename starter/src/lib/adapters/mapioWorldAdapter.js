@@ -5,7 +5,7 @@
  * ⚠️ It used to live in `lib/parity/`, which made `hooks/useMapioDispatcher.js`
  * import the test harness in order to get a shipped adapter. Same world, same
  * numbers, two callers: it belongs beside `camioWorldAdapter.js` and
- * `audiomWorldAdapter.js`. `parity/index.js` re-exports it, so the benchmark's
+ * `audiomWorldAdapter.js`. (The `parity/index.js` barrel that re-exported it,
  * single import point is unchanged.
  *
  * `browser-voice-exploration-plan.md` §6 makes `run_parity_benchmark.py` the

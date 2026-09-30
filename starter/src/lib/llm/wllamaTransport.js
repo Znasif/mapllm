@@ -32,6 +32,8 @@
  *   3. **Streaming is a callback, not SSE.** `{stream: true, onData}` yields
  *      the same `chat.completion.chunk` objects `ChatAssembler` already eats,
  *      so there is no second parser and no second assembler.
+ *   4a. **Embeddings do not batch.** `createEmbedding` accepts `string[]` but
+ *      answers with a single vector. `embeddings()` loops. See its doc comment.
  *   4. **Loading is explicit and slow.** HTTP has a server already running;
  *      here the first call would otherwise sit on a 2.6 GB download. Loads are
  *      idempotent, deduped, and observable via `onProgress`.
@@ -645,17 +647,58 @@ export class WllamaTransport {
     return this.stats();
   }
 
-  /** @see HttpTransport.embeddings — same contract, no HTTP. */
-  async embeddings(body, { signal } = {}) {
+  /**
+   * @see HttpTransport.embeddings — same contract, no HTTP.
+   *
+   * ⚠️ DIFFERENCE 5: **wllama does not batch.** `createEmbedding` types its
+   * parameter as `input: string | string[]`, but returns exactly ONE embedding
+   * however many inputs it is handed. The HTTP router returns one per input, so
+   * `LocalLLMClient.embed` — written against that contract — wrote a single
+   * vector into a 2,410-slot array and left the rest `undefined`. Nothing threw.
+   * The index reported 2,410 places, every count looked healthy, and retrieval
+   * silently degraded to "whatever came first in the corpus": measured
+   * 2026-08-29 as L1 recall 0/15 with the same five places returned for every
+   * query, underneath a respectable 70% tool-selection score.
+   *
+   * So the loop is the translation. One call per input, order preserved by
+   * construction. It is sequential because the instance is `n_parallel: 1`
+   * anyway — concurrency here would queue inside the worker, not speed it up.
+   */
+  async embeddings(body, { signal, onProgress } = {}) {
     const engine = await this.#ready(body.model ?? TIER.EMBED);
     const { model, input, ...rest } = body;
-    return engine.instance.createEmbedding({
-      ...rest,
-      input,
-      // Honoured inside wllama's result-polling loop, so a barge-in during a
-      // 3,000-place index build actually stops it.
-      abortSignal: signal,
-    });
+    const inputs = Array.isArray(input) ? input : [input];
+
+    const data = [];
+    let promptTokens = 0;
+    for (let i = 0; i < inputs.length; i += 1) {
+      // Checked per item as well as inside wllama's polling loop, so a barge-in
+      // during a 3,000-place index build stops between items too.
+      if (signal?.aborted) {
+        const err = new Error('Embedding aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      const res = await engine.instance.createEmbedding({
+        ...rest,
+        input: inputs[i],
+        abortSignal: signal,
+      });
+      const row = res?.data?.[0];
+      if (!row) {
+        throw new Error(`wllama returned no embedding for input ${i} of ${inputs.length}`);
+      }
+      data.push({ object: 'embedding', index: i, embedding: row.embedding });
+      promptTokens += res?.usage?.prompt_tokens ?? 0;
+      onProgress?.({ done: i + 1, total: inputs.length });
+    }
+
+    return {
+      object: 'list',
+      model: model ?? TIER.EMBED,
+      data,
+      usage: { prompt_tokens: promptTokens, total_tokens: promptTokens },
+    };
   }
 
   /**

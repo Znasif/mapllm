@@ -82,7 +82,8 @@ function asChunks(completion) {
  * is the entire point of the suite.
  */
 class FakeWllama {
-  constructor({ rounds = [], embedding, log } = {}) {
+  constructor({ rounds = [], embedding, log, batches = true } = {}) {
+    this.batches = batches;
     this.rounds = rounds;
     this.embedding = embedding;
     this.log = log;
@@ -143,11 +144,24 @@ class FakeWllama {
   async createEmbedding(options) {
     this.embedCalls.push(options);
     const inputs = Array.isArray(options.input) ? options.input : [options.input];
+    // ⚠️ REAL wllama returns ONE embedding however many inputs it is given.
+    // This fake used to model the OpenAI CONTRACT instead of the wllama
+    // IMPLEMENTATION, which is why 18 green suites missed a bug that made L1
+    // recall 0/15 in the browser. `batches: false` reproduces the real thing.
+    if (this.batches === false) {
+      const first = inputs[0];
+      return {
+        object: 'list',
+        model: 'l1',
+        data: [{ object: 'embedding', index: 0, embedding: this.embedding ? this.embedding(first, 0) : [String(first).length, 1, 0] }],
+        usage: { prompt_tokens: 1, total_tokens: 1 },
+      };
+    }
     // Deliberately returned OUT OF ORDER with explicit `index` fields: the HTTP
     // server does this and `LocalLLMClient.embed` is written to re-sort. A fake
     // that returns them in order would let a regression through.
     const data = inputs.map((text, index) => ({
-      object: 'embedding', index, embedding: this.embedding ? this.embedding(text, index) : [index + 1, 1, 0],
+      object: 'embedding', index, embedding: this.embedding ? this.embedding(text, index) : [String(text).length, 1, 0],
     }));
     return { object: 'list', model: 'l1', data: data.slice().reverse(), usage: { prompt_tokens: 1, total_tokens: 1 } };
   }
@@ -364,7 +378,12 @@ const clientFor = (transport) => new LocalLLMClient({ transport });
 /* -- 3. two tiers means two instances (plan §8) ------------------------------ */
 
 {
-  const { transport, fakes } = fakeTransport({ embedding: (text, i) => [i + 1, 2, 2] });
+  // Keyed on the TEXT, not the within-call index: wllama gets one input per
+  // call, so a per-call index is always 0 and would give every document the
+  // same vector — the very bug this suite now guards against.
+  const { transport, fakes } = fakeTransport({
+    embedding: (text) => [text.includes('Cafe China') ? 1 : 2, 2, 2],
+  });
   const client = clientFor(transport);
   const vectors = await client.embedDocuments([
     { name: 'Cafe China', text: 'restaurant' },
@@ -374,21 +393,32 @@ const clientFor = (transport) => new LocalLLMClient({ transport });
   check(!!fakes[TIER.EMBED] && fakes[TIER.EMBED] !== fakes[TIER.REASON],
     'l1 runs in its own Wllama instance, not a mode of the chat model');
   check(fakes[TIER.REASON] === undefined, 'and asking for embeddings does not load the 2.6 GB chat model');
-  const inputs = fakes[TIER.EMBED].embedCalls[0].input;
-  check(inputs[0].startsWith('title: Cafe China | text: '),
-    'EmbeddingGemma document prefixes survive the backend swap', inputs[0]);
+  // `input` is a STRING per call now, not an array: wllama does not batch, so
+  // the transport loops and hands it one text at a time.
+  const firstInput = fakes[TIER.EMBED].embedCalls[0].input;
+  check(typeof firstInput === 'string',
+    'each embed call carries a single string, not a batch', typeof firstInput);
+  check(firstInput.startsWith('title: Cafe China | text: '),
+    'EmbeddingGemma document prefixes survive the backend swap', firstInput);
   check(!('model' in fakes[TIER.EMBED].embedCalls[0]),
     '`model` is consumed as tier routing, not forwarded (wllama is one model per instance)');
   const len = Math.hypot(...vectors[0]);
   check(Math.abs(len - 1) < 1e-6, 'vectors come back unit-normalised', `|v| = ${len}`);
+  // The fake's per-call reversal is a no-op now that each call carries one
+  // input, so this no longer tests re-sorting. What matters instead — and what
+  // actually broke in the browser — is that each vector belongs to ITS OWN
+  // document rather than every slot holding the first one.
   const near = (a, b) => Math.abs(a - b) < 1e-6;
   check(near(vectors[0][0], 1 / 3) && near(vectors[1][0], 2 / Math.hypot(2, 2, 2)),
-    're-sorted by `index` despite the fake returning them reversed',
+    'each document gets its own vector, in request order',
     `${vectors[0][0]} / ${vectors[1][0]}`);
+  check(vectors.length === 2 && vectors.every((v) => v && v.length),
+    'no undefined holes in the returned batch');
 
   const queries = await client.embedQueries(['the korean place']);
-  check(fakes[TIER.EMBED].embedCalls[1].input[0].startsWith('task: search result | query: '),
-    'query prefixes too', fakes[TIER.EMBED].embedCalls[1].input[0]);
+  const queryInput = fakes[TIER.EMBED].embedCalls[2].input;
+  check(queryInput.startsWith('task: search result | query: '),
+    'query prefixes too', queryInput);
   check(queries.length === 1 && fakes[TIER.EMBED].loads === 1,
     'the embed instance is loaded exactly once across calls', `${fakes[TIER.EMBED].loads} loads`);
 
@@ -409,9 +439,10 @@ const clientFor = (transport) => new LocalLLMClient({ transport });
 
 {
   // The whole point of wiring l1: `PlaceIndex` — milestone 8, written against
-  // the seam — must run on this backend unchanged. `test_place_index.mjs` can
-  // only prove that against a live router on :8081; this proves the l1 half of
-  // 3w with no server at all. The embedder is a deterministic bag-of-words
+  // the seam — must run on this backend unchanged. This proves the l1 half of
+  // 3w with no server at all. (`test_place_index.mjs` now also runs headless,
+  // against its own fake embedder; it covers cache and LRU mechanics rather
+  // than the transport.) The embedder here is a deterministic bag-of-words
   // encoder, so the expected ranking is arithmetic rather than semantic.
   const { PlaceIndex, MemoryStore } = await import('../src/lib/placeIndex.js');
   const VOCAB = ['korean', 'tofu', 'bank', 'atm', 'coffee', 'sichuan'];
@@ -441,8 +472,10 @@ const clientFor = (transport) => new LocalLLMClient({ transport });
   const { matches } = await index.resolve('the korean place', ctx);
   check(matches[0]?.name === 'BCD Tofu House',
     'and resolve() ranks through it end to end', matches.map((m) => m.name).join(' | '));
-  check(fakes[TIER.EMBED].embedCalls.length === 2 && fakes[TIER.REASON] === undefined,
-    'one batched document call plus one query call, and l3 was never loaded',
+  // One call PER DOCUMENT plus one for the query — wllama cannot batch.
+  const docCount = 3;
+  check(fakes[TIER.EMBED].embedCalls.length === docCount + 1 && fakes[TIER.REASON] === undefined,
+    'one embed call per document plus one query call, and l3 was never loaded',
     `${fakes[TIER.EMBED].embedCalls.length} embed calls`);
 }
 
@@ -672,6 +705,40 @@ const clientFor = (transport) => new LocalLLMClient({ transport });
   const budget = describeBudget({});
   check(/gemma-4-e2b-q4/.test(budget.text) && /two Wllama instances/.test(budget.text),
     'describeBudget prints the two-instance §7.2 arithmetic');
+}
+
+
+{
+  // REGRESSION: wllama's `createEmbedding` answers with ONE vector however many
+  // inputs it gets. The transport must loop, or `LocalLLMClient.embed` writes a
+  // single vector into an N-slot array and every retrieval afterwards ranks by
+  // whatever happened to come first. Measured in the browser as L1 recall 0/15.
+  const fake = new FakeWllama({ batches: false, embedding: (text) => [text.length, 1, 0] });
+  const transport = createWllamaTransport({ createInstance: async () => fake });
+  const texts = ['alpha', 'bb', 'ccc', 'dddd'];
+  const res = await transport.embeddings({ model: TIER.EMBED, input: texts });
+
+  check(res.data.length === texts.length,
+    'one embedding per input despite a non-batching backend', `got ${res.data.length}`);
+  check(fake.embedCalls.length === texts.length,
+    'one backend call per input', `got ${fake.embedCalls.length}`);
+  check(fake.embedCalls.every((c) => typeof c.input === 'string'),
+    'each call receives a single string', JSON.stringify(fake.embedCalls.map((c) => c.input)));
+  check(res.data.every((r, i) => r.index === i),
+    'indices are 0..n-1 in order', JSON.stringify(res.data.map((r) => r.index)));
+  check(res.data.every((r, i) => r.embedding[0] === texts[i].length),
+    'each vector corresponds to its OWN input', JSON.stringify(res.data.map((r) => r.embedding[0])));
+  check(res.usage.prompt_tokens === texts.length,
+    'usage is summed across calls', String(res.usage.prompt_tokens));
+
+  // And the client on top must now produce N distinct unit vectors.
+  const client = new LocalLLMClient({ transport });
+  const vecs = await client.embed(texts);
+  check(vecs.length === texts.length, 'client returns one vector per text');
+  check(vecs.every((v) => v && v.length === 3), 'no undefined holes');
+  check(new Set(vecs.map((v) => v[0].toFixed(6))).size > 1,
+    'vectors are not all identical — the 0/15-recall signature',
+    JSON.stringify(vecs.map((v) => v[0])));
 }
 
 console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} check(s) failed`}`);

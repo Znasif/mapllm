@@ -129,6 +129,156 @@ export function fromCamioPoi(poi, id) {
   };
 }
 
+/** Joins the dumped property values; `placeDocument` reads the result as prose. */
+const SEPARATOR = '. ';
+
+/** Longest single property value kept, in characters. */
+export const AUDIOM_MAX_VALUE_CHARS = 200;
+
+/** Longest joined property dump kept, in characters. */
+export const AUDIOM_MAX_TOTAL_CHARS = 600;
+
+/**
+ * Does this value carry language, as opposed to being an identifier?
+ *
+ * The ONLY filter applied to an Audiom feature's properties, and it is
+ * deliberately structural rather than name-based: a string containing at least
+ * one letter. That keeps "Rolling glacial sediment", "B7: Highways" and
+ * "Symbol 3a"; it drops "", "12345", "40.7128" and every numeric attribute,
+ * which are high-cardinality noise that cannot help resolve a NAME.
+ *
+ * Nothing keys off the property's NAME, because we do not know it. See
+ * `fromAudiomPlace`.
+ */
+function carriesLanguage(value) {
+  return typeof value === 'string' && /\p{L}/u.test(value);
+}
+
+/**
+ * Normalise an **Audiom** place record into the shape `placeDocument` expects.
+ *
+ * ── WHY THIS DUMPS RATHER THAN MAPS ───────────────────────────────────────
+ *
+ * There is no property schema across Audiom maps. An OSM-sourced map, an ESRI
+ * import and a hand-built custom map share almost no attribute names, and the
+ * prose that matters might live under `description`, `Symbol_Description`,
+ * `UNIT_NAME` or something nobody has seen yet. Any allowlist of "expected"
+ * keys indexes nothing on the first map that disagrees with it — and does so
+ * silently, producing a plausible-looking index that retrieves badly.
+ *
+ * Audiom itself takes exactly this position on both sides of the wire:
+ *
+ *   - `Audiom-Front-End/src/modules/embed/hooks/useAudiomClient.ts:39`
+ *     emits `properties: { ...feature.properties }` — everything, unfiltered.
+ *   - `Audiom-Backend` `createFeatureIndexer` walks `Object.entries(properties)`
+ *     with no allowlist, discovering keys and value counts as it goes.
+ *
+ * So this takes **what is available, not what is expected**: every property
+ * value that carries language, deduplicated, bounded. The adapter has already
+ * lifted `category` (from `category`/`ruleType`/`briefing`) and `aliases` (from
+ * `ruleName`/`Label`/`Symbol`), so values already represented there are skipped
+ * to avoid embedding the same string three times — by VALUE, never by key name.
+ *
+ * Geometry is not read, for the same reason `fromCamioPoi` ignores `coords`:
+ * L1 resolves the NAME, tools compute the geometry.
+ *
+ * `accessibility` is empty because Audiom has no accessibility convention in
+ * `props`. Explicitly empty rather than omitted, so it reads as unpopulated
+ * rather than forgotten.
+ *
+ * @param {{name?: string, category?: string, aliases?: string[], props?: object,
+ *   provenance?: object, id?: string|number}} place
+ * @param {string|number} [id]
+ * @param {{maxValueChars?: number, maxTotalChars?: number}} [opts]
+ */
+export function fromAudiomPlace(place, id, {
+  maxValueChars = AUDIOM_MAX_VALUE_CHARS,
+  maxTotalChars = AUDIOM_MAX_TOTAL_CHARS,
+} = {}) {
+  const props = place?.props || {};
+  const name = place?.name || '';
+  const aliases = place?.aliases || [];
+  const category = place?.category || '';
+
+  const norm = (v) => String(v).trim().toLowerCase();
+  // Already-represented check is by VALUE: we cannot key off property names we
+  // have never seen, and the same text under a different key is still a repeat.
+  // Split on the separators the adapter joined with: `category` arrives as
+  // "glacial, contact, structural", and its PARTS are what the props hold.
+  // Comparing the joined string would re-index every one of them.
+  const represented = [name, ...aliases, ...String(category).split(/\s*,\s*/)];
+  const already = new Set(represented.filter(Boolean).map(norm));
+
+  const kept = [];
+  let total = 0;
+  for (const value of Object.values(props)) {
+    if (!carriesLanguage(value)) continue;
+    const text = value.trim();
+    const key = norm(text);
+    if (!text || already.has(key)) continue;
+    already.add(key);
+    const clipped = text.length > maxValueChars ? `${text.slice(0, maxValueChars)}…` : text;
+    // Bounded on purpose: one verbose feature must not crowd the embedding
+    // window and make every other place in the index harder to retrieve.
+    // The separator counts — bounding only the values lets the joined string
+    // overrun by two characters per property, which is how this first went out.
+    const cost = clipped.length + (kept.length ? SEPARATOR.length : 0);
+    if (total + cost > maxTotalChars) break;
+    kept.push(clipped);
+    total += cost;
+  }
+
+  const context = [...new Set([...aliases, place?.provenance?.layer].filter(Boolean))];
+
+  return {
+    id: id ?? place?.id,
+    name: place?.name,
+    category,
+    locationDescription: kept.join(SEPARATOR),
+    accessibility: [],
+    context: context.join(' · '),
+  };
+}
+
+/**
+ * The places an adapter holds, however it happens to expose them.
+ *
+ * ⚠️ The `WorldAdapter` interface does not declare `places` at all. `mapio` and
+ * `camio` expose a METHOD; `audiom` exposes a FIELD (`this.places = []`), so it
+ * cannot simply gain a method of the same name — the field would shadow it.
+ * Unifying that means renaming the field at ~14 call sites inside the Audiom
+ * adapter and adding `places()` to the interface; until then this is the one
+ * place that knows about the inconsistency, instead of every caller.
+ *
+ * @param {object} adapter
+ * @returns {object[]}
+ */
+export function placesOf(adapter) {
+  const p = adapter?.places;
+  if (typeof p === 'function') return adapter.places();
+  return Array.isArray(p) ? p : [];
+}
+
+/**
+ * Normalise whatever an adapter holds, choosing the right normaliser from the
+ * record itself rather than from a flag the caller has to remember to pass.
+ *
+ * The discriminator is `provenance.source === 'audiom:layers'`, which the
+ * Audiom adapter stamps on every record it builds. A record carrying neither
+ * shape's markers is passed through untouched, so a future adapter that already
+ * emits `placeDocument`'s shape needs no entry here.
+ *
+ * @param {object[]} places
+ * @returns {object[]}
+ */
+export function normalisePlaces(places) {
+  return (places || []).map((p, i) => {
+    if (p?.provenance?.source === 'audiom:layers') return fromAudiomPlace(p, i);
+    if (p && ('categories' in p || 'location_description' in p)) return fromCamioPoi(p, i);
+    return { id: p?.id ?? i, ...p };
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * Storage. IndexedDB in the browser; injectable so the retrieval logic
  * is testable in Node, where IndexedDB does not exist.

@@ -293,7 +293,7 @@ export function useMapioDispatcher({
         registerCoreTools(registry);
 
         // camio-shaped POI records, straight off the JSON — the same source
-        // `parity/world.js` builds its L1 index from.
+        // the L1 index is built from.
         const places = (graphDict.points_of_interest || []).map((poi, i) => fromCamioPoi(poi, i));
 
         if (!isCurrent) return;

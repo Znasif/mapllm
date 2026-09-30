@@ -1,0 +1,329 @@
+[
+  {
+    "id": "OSM-01",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What am I touching?",
+    "expected_tool": "whats_here",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-02",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is here?",
+    "expected_tool": "whats_here",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-03",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What's around me?",
+    "expected_tool": "describe_surroundings",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-04",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Describe my surroundings.",
+    "expected_tool": "describe_surroundings",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-05",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Describe Valley Bank.",
+    "expected_tool": "get_place_details",
+    "expected_args": {
+      "place": "Valley Bank"
+    },
+    "context": {
+      "resolved_places": [
+        "Valley Bank",
+        "East 28th Street",
+        "AOKO"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-06",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Describe Noa.",
+    "expected_tool": "get_place_details",
+    "expected_args": {
+      "place": "Noa"
+    },
+    "context": {
+      "resolved_places": [
+        "Noa",
+        "Yurim Hat",
+        "Mulberry & Vine"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-07",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is Gruber Pictures?",
+    "expected_tool": "get_place_details",
+    "expected_args": {
+      "place": "Gruber Pictures"
+    },
+    "context": {
+      "resolved_places": [
+        "Gruber Pictures",
+        "Take31",
+        "East End Gateway"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-08",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is the distance to Wolfgang’s Steakhouse?",
+    "expected_tool": "get_distance_to",
+    "expected_args": {
+      "place": "Wolfgang’s Steakhouse"
+    },
+    "context": {
+      "resolved_places": [
+        "Wolfgang’s Steakhouse",
+        "Penn Station (Upper Level)",
+        "777 Sixth Avenue"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-09",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "How far is Acronym?",
+    "expected_tool": "get_distance_to",
+    "expected_args": {
+      "place": "Acronym"
+    },
+    "context": {
+      "resolved_places": [
+        "Acronym",
+        "KidsThrive NYC",
+        "West 39th Street"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-10",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "How far is The Centurian Building?",
+    "expected_tool": "get_distance_to",
+    "expected_args": {
+      "place": "The Centurian Building"
+    },
+    "context": {
+      "resolved_places": [
+        "The Centurian Building",
+        "City Streets",
+        "Planet Fitness"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-11",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What direction is Pokeworksco in?",
+    "expected_tool": "get_direction_to",
+    "expected_args": {
+      "place": "Pokeworksco"
+    },
+    "context": {
+      "resolved_places": [
+        "Pokeworksco",
+        "Astro Gallery of Gems",
+        "Lindt"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-12",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Which way is Monarch Rooftop?",
+    "expected_tool": "get_direction_to",
+    "expected_args": {
+      "place": "Monarch Rooftop"
+    },
+    "context": {
+      "resolved_places": [
+        "Monarch Rooftop",
+        "Deli El Chapincito",
+        "Chelsea Tower"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-13",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What direction is WQXR-FM (New York) in?",
+    "expected_tool": "get_direction_to",
+    "expected_args": {
+      "place": "WQXR-FM (New York)"
+    },
+    "context": {
+      "resolved_places": [
+        "WQXR-FM (New York)",
+        "Roma Pizza",
+        "ONGI"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-14",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Is this FashON7?",
+    "expected_tool": "am_i_at",
+    "expected_args": {
+      "place": "FashON7"
+    },
+    "context": {
+      "resolved_places": [
+        "FashON7",
+        "Keens Steakhouse",
+        "Nonono"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-15",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Is this Sakura Market?",
+    "expected_tool": "am_i_at",
+    "expected_args": {
+      "place": "Sakura Market"
+    },
+    "context": {
+      "resolved_places": [
+        "Sakura Market",
+        "Delmonico's Kitchen",
+        "LinkNYC"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-16",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Is this Sweet Grafitti?",
+    "expected_tool": "am_i_at",
+    "expected_args": {
+      "place": "Sweet Grafitti"
+    },
+    "context": {
+      "resolved_places": [
+        "Sweet Grafitti",
+        "David's Bridal",
+        "Victoria's Secret"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-17",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Take me to Equinox.",
+    "expected_tool": "route_to",
+    "expected_args": {
+      "place": "Equinox"
+    },
+    "context": {
+      "resolved_places": [
+        "Equinox",
+        "C",
+        "T-Mobile"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-18",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Navigate to Gong Cha.",
+    "expected_tool": "route_to",
+    "expected_args": {
+      "place": "Gong Cha"
+    },
+    "context": {
+      "resolved_places": [
+        "Gong Cha",
+        "AO Organic Japanese",
+        "Han Bat"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-19",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Navigate to Icon Parking.",
+    "expected_tool": "route_to",
+    "expected_args": {
+      "place": "Icon Parking"
+    },
+    "context": {
+      "resolved_places": [
+        "Icon Parking",
+        "Pelicana Chicken",
+        "chelsey scarves"
+      ]
+    },
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-20",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is the weather like?",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-21",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Who is the president?",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-22",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What time is it?",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  },
+  {
+    "id": "OSM-23",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Tell me a joke.",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:dataset-attributes?sourceType=osm&bbox=[-73.9920,40.7440,-73.9800,40.7530]"
+  }
+]

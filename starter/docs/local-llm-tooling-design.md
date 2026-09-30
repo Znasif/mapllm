@@ -917,14 +917,25 @@ ssh -L 8081:127.0.0.1:8081 <mac>
 
 | what it proves | command |
 |---|---|
-| §6.4 index build, recall@k, LRU eviction | `node starter/scripts/test_place_index.mjs` |
-| §4.3 end-to-end L1 → candidates → L3 tool call | `node starter/scripts/test_candidate_prompt.mjs` |
-| §5 tool selection over the full dataset | `python3 starter/scripts/eval_tools.py --simulate-loop` |
+| §6.4 index build, cache reuse, LRU eviction | `node starter/scripts/test_place_index.mjs` |
+| §6.4 recall@k against REAL embeddings | `explore/wllama-spike/tooleval.html`, `l1` mode |
+| §4.3 candidate block → tool call, graded | `node starter/scripts/test_tool_eval.mjs` (logic) + `tooleval.html` (live) |
+| §5 tool selection over the full dataset | `node starter/scripts/eval_tools.mjs --dry-run` (compile) + `tooleval.html` (score) |
 
-Both `.mjs` scripts exit non-zero on regression and take `VITE_LLM_BASE` to retarget the server.
-`test_candidate_prompt.mjs` marks one case `HARD` and excludes it from the gate — "am I at the
-observation deck", where the linking tag is absent from the record and E4B declines rather than
-guesses. It passes only with the candidate block in the system message, at 5.6× the latency (§6.1).
+⚠️ **Rewired 2026-08-28, when the Mac router stopped being a target.** These checks used to
+require a live server on `:8081` and `VITE_LLM_BASE` to retarget it. With wllama the only
+backend, and wllama being browser-only, nothing needing real weights can run in Node any more.
+The split is now by *what a check needs*, not by language:
+
+- **Logic runs headless.** `test_place_index.mjs` was rebuilt around a deterministic fake
+  embedder — build, cache reuse, LRU eviction and tie handling never needed a server, and now
+  they always run.
+- **Anything needing real weights runs in a tab**, where the models live, and grades itself.
+  `tooleval.html` reports L1 recall separately from L3 tool selection, so a miss is attributed
+  to the layer that caused it.
+- `test_candidate_prompt.mjs` was **deleted**. It needed both the router and a hardcoded
+  `/Users/…` model path, and its end-to-end L1 → candidates → L3 coverage is exactly what
+  `tooleval.html` now does — with a score, instead of a human reading the output.
 
 ### 11.3 Checking the serving assumptions
 

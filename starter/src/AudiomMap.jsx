@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AUDIOM_ORIGIN, AUDIOM_KEY, buildEmbedSrc, bboxSpanMeters } from './audiom';
 import { createAudiomChannel, INBOUND, whatsHere as whatsHereAnswer } from './lib/audiomChannel';
+import { buildCandidates, formatProbeReport, probeCommands, shortCandidates } from './lib/audiomCommandProbe';
 import { speak } from './lib/speak';
 import { AudiomMic } from './AudiomMic';
 
@@ -117,10 +118,45 @@ export function AudiomMap({
    *
    * Recording is off until that first call, so this costs nothing by default.
    */
+  /**
+   * Second console handle: `audiomProbe()`.
+   *
+   * `executeCommand` takes a command string and we know only two of them —
+   * `'up'` and `'left'`, from the bounds probe below. Audiom's keyboard help
+   * lists ~70 shortcuts but those are KEY names, and `'up'` is not `'ArrowUp'`,
+   * so the vocabulary has to be discovered rather than guessed. See
+   * `lib/audiomCommandProbe.js` for why the error-oracle question comes first.
+   *
+   *   audiomProbe()                 short run: oracle + `up` + 8 candidates
+   *   audiomProbe({ full: true })   every naming variant of every safe label
+   *
+   * Ungated, like `audiomChannel` above, and inert until called: nothing runs
+   * and nothing is sent unless a human types it.
+   */
   useEffect(() => {
     if (!channel || typeof window === 'undefined') return undefined;
     window.audiomChannel = channel;
-    return () => { if (window.audiomChannel === channel) delete window.audiomChannel; };
+    window.audiomProbe = async ({ full = false, ...rest } = {}) => {
+      const result = await probeCommands(channel, {
+        candidates: full ? buildCandidates() : shortCandidates(),
+        onProgress: ({ index, total, command }) => {
+          if (index === 1 || index === total || index % 10 === 0) {
+            console.log(`[audiom] probe ${index}/${total} — ${command}`);
+          }
+        },
+        ...rest,
+      });
+      // Kept so a truncated console capture is recoverable without re-running
+      // the ~3-minute sweep: `audiomProbeLast.results.filter(r => !r.errored)`.
+      window.audiomProbeLast = result;
+      console.log(formatProbeReport(result));
+      return result;
+    };
+    console.log('[audiom] console: audiomProbe()  ·  audiomProbe({ full: true })');
+    return () => {
+      if (window.audiomChannel === channel) delete window.audiomChannel;
+      delete window.audiomProbe;
+    };
   }, [channel]);
 
   /**

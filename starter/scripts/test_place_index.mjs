@@ -1,83 +1,172 @@
 #!/usr/bin/env node
 /**
- * Milestone 8 check: PlaceIndex against the live local server.
+ * PlaceIndex mechanics — build, cache reuse, LRU eviction, tie handling.
  *
- *   VITE_LLM_BASE=http://127.0.0.1:8081/v1 node starter/scripts/test_place_index.mjs
+ * ── WHAT CHANGED AND WHY ──────────────────────────────────────────────────
  *
- * Uses MemoryStore because Node has no IndexedDB; the retrieval path under
- * test is identical, only persistence differs.
+ * This file used to require a live embedding server (`127.0.0.1:8081`, the Mac
+ * router) and measured two different things at once: semantic recall@k on six
+ * real utterances, and the index's own cache mechanics. With the router gone it
+ * could not run at all, so it measured nothing.
+ *
+ * The two halves have different homes now:
+ *
+ *   recall@k        needs REAL embeddings, so it belongs where the models are —
+ *                   `explore/wllama-spike/tooleval.html` in `l1` mode, which
+ *                   retrieves with EmbeddingGemma and grades retrieval
+ *                   separately from tool selection (`toolEval.gradeRetrieval`).
+ *   cache mechanics  never needed a server. Build/rebuild/evict is pure logic
+ *                   over injected vectors, and it is what this file keeps.
+ *
+ * The fake client returns deterministic unit vectors, so ranking is exactly
+ * predictable and a scoring regression fails here loudly instead of hiding
+ * inside embedding noise. It is NOT a semantic test and must not grow into one.
  */
 
-import { LocalLLMClient } from '../src/lib/localLLM.js';
-import { PlaceIndex, MemoryStore, indexKey, TIE_EPSILON } from '../src/lib/placeIndex.js';
+import {
+  MemoryStore, PlaceIndex, TIE_EPSILON, indexKey,
+} from '../src/lib/placeIndex.js';
 
-const BASE = process.env.VITE_LLM_BASE || 'http://127.0.0.1:8081/v1';
+let pass = 0;
+let fail = 0;
+const check = (name, cond, extra = '') => {
+  if (cond) { pass += 1; console.log(`  ok   ${name}`); }
+  else { fail += 1; console.log(`  FAIL ${name}${extra ? ` — ${extra}` : ''}`); }
+};
+const eq = (name, a, b) => check(name, JSON.stringify(a) === JSON.stringify(b),
+  `got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
 
-// Real POIs from simple_camio/models/new_york/new_york.json
+/**
+ * Deterministic stand-in for the embedding tier.
+ *
+ * Each document becomes a one-hot unit vector chosen by its position in
+ * `vocabulary`, and a query becomes the vector of whichever vocabulary term it
+ * contains. Cosine similarity is then exactly 1 for the intended match and 0
+ * for everything else, which makes ranking assertions exact.
+ */
+function fakeClient(vocabulary) {
+  const dim = vocabulary.length;
+  const oneHot = (i) => { const v = new Float32Array(dim); if (i >= 0) v[i] = 1; return v; };
+  const indexOfTerm = (text) => vocabulary.findIndex((t) => String(text).toLowerCase().includes(t));
+  let embedCalls = 0;
+  return {
+    get embedCalls() { return embedCalls; },
+    async embedDocuments(docs) {
+      embedCalls += 1;
+      return docs.map((d) => oneHot(indexOfTerm(typeof d === 'string' ? d : d?.text ?? '')));
+    },
+    async embedQueries(queries) {
+      return queries.map((q) => oneHot(indexOfTerm(q)));
+    },
+  };
+}
+
+// Real names from `docs/eval_places_empire_state.json`, i.e. from Audiom's own
+// OSM read of the Empire State neighbourhood. Nothing here is MapIO.
+const VOCAB = ['rail', 'hotel', 'plaza', 'broadway', 'building'];
 const PLACES = [
-  { id: 0, name: 'American Academy of Dramatic Arts', category: 'education.college', context: 'Madison Avenue' },
-  { id: 1, name: 'Andrews NYC Diner', category: 'restaurant.diner', context: 'American food' },
-  { id: 2, name: 'BCD Tofu House', category: 'restaurant.korean', context: 'tofu soup, open late' },
-  { id: 3, name: 'Bank of America', category: 'financial.bank', context: 'ATM' },
-  { id: 4, name: 'Bank of Hope', category: 'financial.bank', context: 'ATM' },
-  { id: 5, name: 'Barn Joo 35', category: 'restaurant.korean', context: 'gastropub' },
-  { id: 6, name: 'Blaggards Pub', category: 'bar.pub', context: 'Irish pub' },
-  { id: 7, name: 'Blank Slate Coffee + Kitchen', category: 'cafe.coffee', context: 'espresso, sandwiches' },
-  { id: 8, name: 'Cafe China', category: 'restaurant.chinese', context: 'Sichuan' },
-  { id: 9, name: 'Empire State Building', category: 'tourism.attraction', context: 'observation deck' },
+  { id: 0, name: 'PATH (rail system)', category: 'railway', context: 'rail system' },
+  { id: 1, name: 'The Grand Hotel', category: 'tourism.hotel', context: 'hotel' },
+  { id: 2, name: 'Big Screen Plaza', category: 'amenity', context: 'plaza' },
+  { id: 3, name: 'Broadway', category: 'highway', context: 'broadway' },
+  { id: 4, name: 'The Martin Building', category: 'building', context: 'building' },
 ];
+const ctx = { worldId: 'audiom:empire_state', windowId: 'full' };
 
-// Scored on recall@k, not top-1. L1 narrows context for L3; which of several
-// equally-valid candidates ranks first is arbitrary and not L1's job to settle.
-// Each case lists every place a reasonable person would accept.
-const CASES = [
-  ['the Korean place',        ['BCD Tofu House', 'Barn Joo 35']],
-  ['where can I get coffee',  ['Blank Slate Coffee + Kitchen']],
-  ['I need an ATM',           ['Bank of America', 'Bank of Hope']],
-  ['Sichuan food',            ['Cafe China']],
-  ['the observation deck',    ['Empire State Building']],
-  ['somewhere to get a pint', ['Blaggards Pub']],
-];
-
-const client = new LocalLLMClient({ baseUrl: BASE });
-const store = new MemoryStore();
-const index = new PlaceIndex({ client, store, maxCached: 3 });
-
-const ctx = { worldId: 'camio:new_york', windowId: 'full' };
-
-console.log(`server: ${BASE}\nbuilding index over ${PLACES.length} places...`);
-let t0 = Date.now();
-const record = await index.build({ ...ctx, places: PLACES });
-console.log(`  built in ${Date.now() - t0}ms — dim=${record.dim} count=${record.count} ` +
-            `bytes=${record.vectors.byteLength}\n`);
-
-t0 = Date.now();
-const cached = await index.build({ ...ctx, places: PLACES });
-console.log(`rebuild hits cache: ${cached.builtAt === record.builtAt ? 'yes' : 'NO'} (${Date.now() - t0}ms)\n`);
-
-let hit1 = 0, hit5 = 0;
-for (const [utterance, acceptable] of CASES) {
-  const t = Date.now();
-  const { matches, confident, margin } = await index.resolve(utterance, ctx);
-  const names = matches.map((m) => m.name);
-  const r1 = acceptable.includes(names[0]);
-  const r5 = names.some((n) => acceptable.includes(n));
-  hit1 += r1; hit5 += r5;
-  console.log(`${r5 ? 'ok  ' : 'MISS'} "${utterance}"  (${Date.now() - t}ms)`);
-  console.log(`     top-5: ${names.join(' | ')}`);
-  console.log(`     margin=${margin.toFixed(3)} confident=${confident}` +
-              `  -> ${confident ? 'L2 fast path allowed' : 'escalate to L3 with all candidates'}`);
+console.log('\nbuild');
+{
+  const client = fakeClient(VOCAB);
+  const index = new PlaceIndex({ client, store: new MemoryStore(), maxCached: 3 });
+  const record = await index.build({ ...ctx, places: PLACES });
+  eq('count', record.count, PLACES.length);
+  eq('dim', record.dim, VOCAB.length);
+  check('vectors sized count x dim', record.vectors.length === record.count * record.dim,
+    `${record.vectors.length}`);
+  check('embedded once', client.embedCalls === 1, String(client.embedCalls));
 }
 
-// LRU: maxCached=3, so building 4 windows must drop the oldest.
-for (const w of ['w2', 'w3', 'w4']) {
-  await index.build({ worldId: ctx.worldId, windowId: w, places: PLACES.slice(0, 3) });
-}
-const remaining = (await store.entries()).map((e) => e.key);
-const evicted = !remaining.includes(indexKey(ctx.worldId, 'full'));
-console.log(`\nLRU eviction at maxCached=3: ${remaining.length} kept, oldest evicted: ${evicted ? 'yes' : 'NO'}`);
-console.log(`  kept: ${remaining.join(', ')}`);
+console.log('\nrebuild reuses the cache');
+{
+  const client = fakeClient(VOCAB);
+  const index = new PlaceIndex({ client, store: new MemoryStore(), maxCached: 3 });
+  const first = await index.build({ ...ctx, places: PLACES });
+  const second = await index.build({ ...ctx, places: PLACES });
+  eq('same build timestamp', second.builtAt, first.builtAt);
+  check('no second embedding pass', client.embedCalls === 1, String(client.embedCalls));
 
-console.log(`\nrecall@1: ${hit1}/${CASES.length}   recall@5: ${hit5}/${CASES.length}   (tie epsilon ${TIE_EPSILON})`);
-console.log('recall@5 is the metric that matters — the whole top-k is what L3 receives.');
-process.exit(hit5 === CASES.length && evicted ? 0 : 1);
+  const forced = await index.build({ ...ctx, places: PLACES, force: true });
+  check('force: re-embeds', client.embedCalls === 2, String(client.embedCalls));
+  check('force: new record', forced.builtAt >= first.builtAt);
+}
+
+console.log('\nresolve ranks by similarity');
+{
+  const client = fakeClient(VOCAB);
+  const index = new PlaceIndex({ client, store: new MemoryStore(), maxCached: 3 });
+  await index.build({ ...ctx, places: PLACES });
+
+  for (const [utterance, want] of [
+    ['the rail system', 'PATH (rail system)'],
+    ['find me a hotel', 'The Grand Hotel'],
+    ['the plaza', 'Big Screen Plaza'],
+    ['walk down broadway', 'Broadway'],
+  ]) {
+    const { matches } = await index.resolve(utterance, ctx);
+    eq(`"${utterance}" ranks ${want} first`, matches[0]?.name, want);
+  }
+
+  // An utterance matching no vocabulary term scores 0 against everything: the
+  // index must still answer, and must not claim confidence.
+  const { matches, confident } = await index.resolve('completely unrelated', ctx);
+  check('unmatched utterance still returns candidates', matches.length > 0);
+  check('and is not confident', confident === false);
+}
+
+console.log('\nno index');
+{
+  const index = new PlaceIndex({ client: fakeClient(VOCAB), store: new MemoryStore() });
+  const res = await index.resolve('anything', ctx);
+  eq('reason', res.reason, 'no-index');
+  eq('no matches', res.matches, []);
+  check('not confident', res.confident === false);
+}
+
+console.log('\nLRU eviction');
+{
+  const store = new MemoryStore();
+  const index = new PlaceIndex({ client: fakeClient(VOCAB), store, maxCached: 3 });
+  await index.build({ ...ctx, places: PLACES });
+  for (const windowId of ['w2', 'w3', 'w4']) {
+    await index.build({ worldId: ctx.worldId, windowId, places: PLACES.slice(0, 3) });
+  }
+  const keys = (await store.entries()).map((e) => e.key);
+  check('capped at maxCached', keys.length === 3, `${keys.length}: ${keys.join(', ')}`);
+  check('oldest window evicted', !keys.includes(indexKey(ctx.worldId, 'full')), keys.join(', '));
+  check('newest window kept', keys.includes(indexKey(ctx.worldId, 'w4')), keys.join(', '));
+}
+
+console.log('\ntie epsilon');
+{
+  check('TIE_EPSILON is a small positive number',
+    typeof TIE_EPSILON === 'number' && TIE_EPSILON > 0 && TIE_EPSILON < 1, String(TIE_EPSILON));
+
+  // Two places sharing a vocabulary term score identically, so the margin is 0
+  // and the result must be reported as not-confident rather than picking one.
+  const client = fakeClient(['plaza']);
+  const index = new PlaceIndex({ client, store: new MemoryStore() });
+  await index.build({
+    ...ctx,
+    places: [
+      { id: 0, name: 'Big Screen Plaza', category: 'amenity', context: 'plaza' },
+      { id: 1, name: 'Greeley Square Plaza', category: 'amenity', context: 'plaza' },
+    ],
+  });
+  const { matches, confident, margin } = await index.resolve('the plaza', ctx);
+  check('both plazas returned', matches.length === 2, JSON.stringify(matches.map((m) => m.name)));
+  check('margin is ~0', Math.abs(margin) < TIE_EPSILON, String(margin));
+  check('a tie is not confident', confident === false);
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail === 0) console.log('ALL PASS');
+process.exit(fail === 0 ? 0 : 1);

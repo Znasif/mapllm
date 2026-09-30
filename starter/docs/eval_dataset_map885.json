@@ -1,0 +1,328 @@
+[
+  {
+    "id": "M885-01",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What am I touching?",
+    "expected_tool": "whats_here",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-02",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is here?",
+    "expected_tool": "whats_here",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-03",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What's around me?",
+    "expected_tool": "describe_surroundings",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-04",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Describe my surroundings.",
+    "expected_tool": "describe_surroundings",
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-05",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Describe Wisconsin Rapids.",
+    "expected_tool": "get_place_details",
+    "expected_args": {
+      "place": "Wisconsin Rapids"
+    },
+    "context": {
+      "resolved_places": [
+        "Wisconsin Rapids",
+        "Vilas",
+        "Driftless Area"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-06",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Describe Lake Michigan Lobe.",
+    "expected_tool": "get_place_details",
+    "expected_args": {
+      "place": "Lake Michigan Lobe"
+    },
+    "context": {
+      "resolved_places": [
+        "Lake Michigan Lobe",
+        "Baraboo River",
+        "Red Cliff"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-07",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is Keshena?",
+    "expected_tool": "get_place_details",
+    "expected_args": {
+      "place": "Keshena"
+    },
+    "context": {
+      "resolved_places": [
+        "Keshena",
+        "Burnett",
+        "Saint Croix Ojibwe Trust Lands"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-08",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "How far is Oneida Reservation?",
+    "expected_tool": "get_distance_to",
+    "expected_args": {
+      "place": "Oneida Reservation"
+    },
+    "context": {
+      "resolved_places": [
+        "Oneida Reservation",
+        "Calumet",
+        "Red Cliff Ojibwe Reservation"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-09",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "How far is Prairie du Chien?",
+    "expected_tool": "get_distance_to",
+    "expected_args": {
+      "place": "Prairie du Chien"
+    },
+    "context": {
+      "resolved_places": [
+        "Prairie du Chien",
+        "Vilas",
+        "Trempealeau"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-10",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "How far is Mauston?",
+    "expected_tool": "get_distance_to",
+    "expected_args": {
+      "place": "Mauston"
+    },
+    "context": {
+      "resolved_places": [
+        "Mauston",
+        "Wisconsin Valley Lobe",
+        "Red Cliff"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-11",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What direction is Forest County Potawatomi Community in?",
+    "expected_tool": "get_direction_to",
+    "expected_args": {
+      "place": "Forest County Potawatomi Community"
+    },
+    "context": {
+      "resolved_places": [
+        "Forest County Potawatomi Community",
+        "Black River"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-12",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What direction is Pepin in?",
+    "expected_tool": "get_direction_to",
+    "expected_args": {
+      "place": "Pepin"
+    },
+    "context": {
+      "resolved_places": [
+        "Pepin",
+        "Bayfield",
+        "Alma"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-13",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What direction is Little Wolf River in?",
+    "expected_tool": "get_direction_to",
+    "expected_args": {
+      "place": "Little Wolf River"
+    },
+    "context": {
+      "resolved_places": [
+        "Little Wolf River",
+        "Menomonee River",
+        "Pecatonica River"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-14",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Am I at Chippewa Lobe?",
+    "expected_tool": "am_i_at",
+    "expected_args": {
+      "place": "Chippewa Lobe"
+    },
+    "context": {
+      "resolved_places": [
+        "Chippewa Lobe",
+        "Hayward",
+        "Pre-Illinoian sediment"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-15",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Is this Bad River Ojibwe Reservation?",
+    "expected_tool": "am_i_at",
+    "expected_args": {
+      "place": "Bad River Ojibwe Reservation"
+    },
+    "context": {
+      "resolved_places": [
+        "Bad River Ojibwe Reservation",
+        "White River",
+        "Michigan"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-16",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Am I at Red Cliff Ojibwe Trust Lands?",
+    "expected_tool": "am_i_at",
+    "expected_args": {
+      "place": "Red Cliff Ojibwe Trust Lands"
+    },
+    "context": {
+      "resolved_places": [
+        "Red Cliff Ojibwe Trust Lands",
+        "Port Washington",
+        "Sugar River"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-17",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Navigate to Janesville.",
+    "expected_tool": "route_to",
+    "expected_args": {
+      "place": "Janesville"
+    },
+    "context": {
+      "resolved_places": [
+        "Janesville",
+        "Siren",
+        "U.S. Highway 151"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-18",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Navigate to Syverson.",
+    "expected_tool": "route_to",
+    "expected_args": {
+      "place": "Syverson"
+    },
+    "context": {
+      "resolved_places": [
+        "Syverson",
+        "Trempealeau River",
+        "U.S. Highway 151"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-19",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Navigate to U.S. Highway 53.",
+    "expected_tool": "route_to",
+    "expected_args": {
+      "place": "U.S. Highway 53"
+    },
+    "context": {
+      "resolved_places": [
+        "U.S. Highway 53",
+        "Interstate 43",
+        "Mauston"
+      ]
+    },
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-20",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What is the weather like?",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-21",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Who is the president?",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-22",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "What time is it?",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  },
+  {
+    "id": "M885-23",
+    "capability_profile": "audiom_tier_a",
+    "utterance": "Tell me a joke.",
+    "expected_tool": null,
+    "expected_args": null,
+    "context": {},
+    "generated_from": "audiom:map-definitions/885/layers"
+  }
+]
