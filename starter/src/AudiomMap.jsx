@@ -59,6 +59,10 @@ function metersBetween(a, b) {
  *                is the in-window place-name list used for contextual biasing.
  *                See `AudiomMic.jsx`; everything with logic in it is in
  *                `lib/speech/`.
+ *  - showMic   : default false — the 🎙 Ask button is not rendered, so the page
+ *                never opens the microphone and `speak()` stays on plain
+ *                `speechSynthesis` (no narration queue). Pass `showMic` to bring
+ *                the button back; the speech props above only matter when it is.
  *
  * ⚠️ The raw postMessage protocol is NOT owned here any more — it lives in
  * `lib/audiomChannel.js` (milestone 5b), which is platform-free and covered by
@@ -70,6 +74,7 @@ export function AudiomMap({
   syncKey = 0, syncView = false, fill = false, autoDrive = true,
   featureRef, onChannel,
   onUtterance, speechPhrases, speechLang = 'en-US', allowCloudStt = true,
+  showMic = false,
 }) {
   const iframeRef = useRef(null);
   const readyRef = useRef(false);
@@ -398,14 +403,16 @@ export function AudiomMap({
         </button>
         {/* Milestone S. Same gesture rules as the button above: pressing it arms
             the narration queue AND opens the microphone. Anything L0 cannot
-            answer goes out through `onUtterance`. */}
-        <AudiomMic
-          onWhatsHere={whatsHere}
-          onUtterance={onUtterance}
-          phrases={speechPhrases}
-          lang={speechLang}
-          allowCloud={allowCloudStt}
-        />
+            answer goes out through `onUtterance`. Off unless `showMic`. */}
+        {showMic && (
+          <AudiomMic
+            onWhatsHere={whatsHere}
+            onUtterance={onUtterance}
+            phrases={speechPhrases}
+            lang={speechLang}
+            allowCloud={allowCloudStt}
+          />
+        )}
       </div>
       <iframe
         ref={iframeRef}
