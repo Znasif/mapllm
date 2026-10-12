@@ -85,6 +85,21 @@ jobs:
           VITE_PAGES_ENTRY: audiom
         run: npm run build
 
+      # Pages serves the bare site URL only from index.html, which the
+      # audiom-only build does not produce. Redirect it to the Audiom page,
+      # keeping any ?query/#hash (e.g. ?map=885). Relative URL, so it works
+      # under the /<repo>/ base path.
+      - name: Redirect site root to audiom.html
+        run: |
+          cat > dist/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>Redirecting…</title>
+          <meta http-equiv="refresh" content="0; url=audiom.html">
+          <script>location.replace('audiom.html' + location.search + location.hash);</script>
+          <a href="audiom.html">Continue to the Audiom tactile explorer</a>
+          HTML
+
       - name: Check artifact against Pages limits
         run: |
           echo "dist size: $(du -sh dist | cut -f1)"
