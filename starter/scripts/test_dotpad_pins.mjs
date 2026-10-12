@@ -9,7 +9,7 @@
  * clock is passed in, so the dwell and rate limits are checked frame by frame.
  */
 
-import { createPinQuantizer, createSendGate, PRESETS, DEFAULT_PRESET, pinKey } from '../src/lib/dotpadPins.js';
+import { createPinQuantizer, createSendGate, PRESETS, DEFAULT_PRESET, pinKey, FINGER_HYSTERESIS } from '../src/lib/dotpadPins.js';
 
 let failures = 0;
 function check(ok, label, detail = '') {
@@ -89,13 +89,27 @@ section('send gate: interval, dwell, no resend, lift, border band');
   check(d.offer('9,5', 5601) === '9,5', 'configure() switches presets live');
 }
 
+section('finger-sized hysteresis (a fingertip covers ~4 × 4 pins)');
+{
+  const q = createPinQuantizer({ hysteresis: FINGER_HYSTERESIS });
+  const at = (x, y) => q.update(x / 59, y / 39).pin;
+  check(eq(at(30, 20), [30, 20]), 'first touch rounds to the nearest pin');
+  const wobble = [[31.9, 20], [28.1, 21.9], [30, 18.1], [31.5, 21.5], [28.6, 18.6], [30.4, 20.2]];
+  check(wobble.every(([x, y]) => eq(at(x, y), [30, 20])), 'a resting finger wobbling up to ±1.9 pins keeps the same pin');
+  check(eq(at(32.2, 20), [32, 20]), 'moving past 2 pins switches, to the nearest pin');
+  check(eq(at(30.3, 20), [32, 20]), 'and moving back needs another 2 pins');
+  const slide = [];
+  for (let x = 10; x <= 50; x += 0.25) { const p = at(x, 20); if (!slide.length || !eq(slide.at(-1), p)) slide.push(p); }
+  check(slide.length <= 21, `a 40-pin slide sends about every 2 pins (${slide.length - 1} changes)`);
+}
+
 section('presets');
 {
   check(DEFAULT_PRESET === 'dotpad-x', 'DOT Pad X is the default');
-  check(PRESETS['dotpad-x'].minIntervalMs === 150 && PRESETS['dotpad-x'].dwellMs === 0 && PRESETS['dotpad-x'].hysteresis === 0.35,
-    'DOT Pad X: 150 ms, no dwell, h 0.35');
-  check(PRESETS['dotpad-gen1'].minIntervalMs === 2500 && PRESETS['dotpad-gen1'].dwellMs === 600 && PRESETS['dotpad-gen1'].hysteresis === 0.5,
-    'Gen-1: 2.5 s, 600 ms dwell, h 0.5');
+  check(PRESETS['dotpad-x'].minIntervalMs === 150 && PRESETS['dotpad-x'].dwellMs === 0 && PRESETS['dotpad-x'].hysteresis === 1.5,
+    'DOT Pad X: 150 ms, no dwell, finger-sized h 1.5');
+  check(PRESETS['dotpad-gen1'].minIntervalMs === 2500 && PRESETS['dotpad-gen1'].dwellMs === 600 && PRESETS['dotpad-gen1'].hysteresis === 1.5,
+    'Gen-1: 2.5 s, 600 ms dwell, finger-sized h 1.5');
   check(Object.isFrozen(PRESETS) && Object.isFrozen(PRESETS['dotpad-x']), 'frozen');
   check(pinKey([3, 4]) === '3,4' && pinKey(null) === null, 'pinKey');
 }

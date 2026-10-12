@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>CamioDotPad demo</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+				--bg: #f8fafc;
+				--fg: #0f172a;
+				--muted: #475569;
+				--panel: #ffffff;
+				--line: #cbd5e1;
+				--accent: #2563eb;
+			}
+			@media (prefers-color-scheme: dark) {
+				:root {
+					--bg: #0b1220;
+					--fg: #e2e8f0;
+					--muted: #94a3b8;
+					--panel: #111827;
+					--line: #334155;
+					--accent: #60a5fa;
+				}
+			}
+			* { box-sizing: border-box; }
+			body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+			header { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+			h1 { font-size: 18px; margin: 0 0 4px; }
+			header p { margin: 0; color: var(--muted); }
+			main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 12px; padding: 12px 16px; }
+			@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+			section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
+			h2 { font-size: 14px; margin: 0 0 8px; }
+			.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+			button, select, input { font: inherit; }
+			button { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+			button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+			button:disabled { opacity: 0.5; cursor: default; }
+			canvas { width: 100%; height: auto; display: block; background: #0f172a; border-radius: 6px; }
+			#grid { image-rendering: pixelated; }
+			#status { font-weight: 600; }
+			#log { height: 260px; overflow: auto; font: 12px/1.35 ui-monospace, monospace; white-space: pre-wrap; background: var(--bg); border-radius: 6px; padding: 6px; margin: 0; }
+			label { color: var(--muted); }
+			.big { font-size: 22px; font-weight: 700; }
+		</style>
+	</head>
+	<body>
+		<header>
+			<h1>CamioDotPad — live test</h1>
+			<p>Camera fingertip pointer for the DOT Pad. All video stays in this tab. Add <code>?dist</code> to the URL to run the vendored bundle instead of the sources.</p>
+		</header>
+		<main>
+			<section aria-labelledby="h-cam">
+				<h2 id="h-cam">Camera and overlay</h2>
+				<div class="row">
+					<label for="camera">Camera</label>
+					<select id="camera"><option value="">Default camera</option></select>
+					<button id="start" class="primary">Start</button>
+					<button id="stop" disabled>Stop</button>
+				</div>
+				<div class="row">
+					<button id="auto" disabled>Auto-register (A)</button>
+					<button id="corners" disabled>Register by corners (R)</button>
+					<button id="confirm" disabled>Confirm top-left</button>
+					<button id="cancel" disabled>Cancel</button>
+					<label><input id="fixed" type="checkbox" disabled /> Fixed (;)</label>
+					<label><input id="speak" type="checkbox" checked /> Speak prompts</label>
+				</div>
+				<canvas id="debug" width="960" aria-label="Camera with the tracked pin field"></canvas>
+			</section>
+			<section aria-labelledby="h-state">
+				<h2 id="h-state">State</h2>
+				<p id="status" role="status" aria-live="polite">Not started</p>
+				<p>Pin: <span id="pin" class="big">—</span></p>
+				<canvas id="grid" width="600" height="400" aria-label="60 by 40 pin grid with the pointed pin"></canvas>
+				<div class="row" style="margin-top: 8px">
+					<label for="tip">Tip offset (pins)</label>
+					<input id="tip" type="range" min="-1.5" max="1" step="0.25" value="0" />
+					<span id="tipv">0</span>
+				</div>
+				<h2>Events</h2>
+				<pre id="log" aria-live="off"></pre>
+			</section>
+		</main>
+		<script type="module" src="./main.ts"></script>
+	</body>
+</html>

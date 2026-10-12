@@ -86,6 +86,31 @@ export function parseAudiomId(input) {
   return m ? m[1] : null;
 }
 
+/** Largest place extent loaded as a bbox; bigger ones (a city) load around their centre. */
+export const MAX_PLACE_BBOX_METERS = 3000;
+
+/**
+ * A geocoded place → the same view shape `parseAudiomView` returns, in Audiom's
+ * AOI contract. A point (an address) gets the embed's default `hull:360`. An
+ * area small enough to load whole (a park, a campus) gets `extent=bbox` over
+ * its corners; the centre goes first because Audiom starts the avatar on the
+ * first anchor. Larger areas fall back to their centre.
+ *
+ * @param {{lng: number, lat: number}} point
+ * @param {number[]|null} [bbox] [west, south, east, north]
+ */
+export function viewForPlace(point, bbox = null) {
+  const c = `${point.lng},${point.lat}`;
+  const out = { centerLng: point.lng, centerLat: point.lat, anchors: c, extent: 'hull:360' };
+  if (!bbox) return out;
+  const [w, s, e, n] = bbox;
+  const R = 6371008.8, rad = Math.PI / 180;
+  const dx = (e - w) * rad * Math.cos(((s + n) / 2) * rad) * R;
+  const dy = (n - s) * rad * R;
+  if (Math.hypot(dx, dy) > MAX_PLACE_BBOX_METERS) return out;
+  return { ...out, anchors: `${c};${w},${s};${e},${n}`, extent: 'bbox' };
+}
+
 // Pull center/zoom out of a pasted URL if present (e.g. a /map?center=..&zoom=.. link).
 export function parseAudiomView(input) {
   const out = {};
@@ -98,6 +123,20 @@ export function parseAudiomView(input) {
     }
     const zoom = Number(u.searchParams.get('zoom'));
     if (Number.isFinite(zoom) && zoom > 0) out.zoom = zoom;
+    // Audiom's area-of-interest contract (Audiom-Front-End src/lib/aoiUrl.ts):
+    // `anchors=lng,lat;lng,lat…` + `extent=hull:<m>|bbox[:<m>]`. An OSM source
+    // needs an area, so a bare `center` is sent as a one-anchor hull at the
+    // embed's own default (hull:360) — some deploys no longer derive it.
+    const anchors = u.searchParams.get('anchors');
+    const extent = u.searchParams.get('extent');
+    if (anchors) {
+      out.anchors = anchors;
+      const [lng, lat] = anchors.split(';')[0].split(',').map(Number);
+      if (out.centerLng == null && Number.isFinite(lng) && Number.isFinite(lat)) { out.centerLng = lng; out.centerLat = lat; }
+    } else if (out.centerLng != null) {
+      out.anchors = `${out.centerLng},${out.centerLat}`;
+    }
+    if (out.anchors) out.extent = extent || 'hull:360';
   } catch { /* not a URL */ }
   return out;
 }
@@ -127,7 +166,7 @@ export const PREDEFINED_SOURCES = [
 // If it hangs, the fallback is unchanged: drive `/embed/dynamic` with an
 // explicit source (a `PREDEFINED_SOURCES` id or a direct GeoJSON URL).
 // `center`+`zoom` pin the view to the printed material.
-export function buildEmbedSrc({ mapId, sources, center, zoom } = {}) {
+export function buildEmbedSrc({ mapId, sources, center, zoom, anchors, extent } = {}) {
   const p = new URLSearchParams();
   if (AUDIOM_KEY) p.set('apiKey', AUDIOM_KEY);
   p.set('allowedOrigins', window.location.origin); // required to enable postMessage
@@ -141,6 +180,7 @@ export function buildEmbedSrc({ mapId, sources, center, zoom } = {}) {
       p.set('center', `${center.lng.toFixed(6)},${center.lat.toFixed(6)}`);
     }
     if (zoom != null && Number.isFinite(zoom)) p.set('zoom', Number(zoom).toFixed(3));
+    if (anchors) { p.set('anchors', anchors); p.set('extent', extent || 'hull:360'); }
   }
   const path = mapId ? `/embed/${mapId}` : '/embed/dynamic';
   return `${AUDIOM_ORIGIN}${path}?${p.toString()}`;

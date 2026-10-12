@@ -193,7 +193,7 @@ export function AudiomMap({
   // scale changes don't churn the iframe.
   const src = useMemo(() => {
     const viewArgs = syncView && view
-      ? { center: { lng: view.centerLng, lat: view.centerLat }, zoom: view.zoom }
+      ? { center: { lng: view.centerLng, lat: view.centerLat }, zoom: view.zoom, anchors: view.anchors, extent: view.extent }
       : {};
     if (mapId) return buildEmbedSrc({ mapId, ...viewArgs });
     if (sources) return buildEmbedSrc({ sources, ...viewArgs });

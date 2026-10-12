@@ -17,10 +17,18 @@
  * Per-model send policy. The host cannot tell a Gen-1 pad from a DOT Pad X, so
  * the user picks. Gen-1 re-renders and says "Lift your hands…" on every frame
  * (F16), hence the long dwell and interval.
+ *
+ * Hysteresis is sized to the finger, not the pin: a fingertip covers about
+ * 4 × 4 pins, so the tracked point is only meaningful to ~±2 pins. With
+ * h = 1.5 a pin is held until the estimate is more than 2 pins away on an axis
+ * (0.5 + h), so a resting or wobbling finger sends nothing and a moving one
+ * sends roughly every 2 pins — each send being a new avatar move and, in
+ * Audiom's grid mode, a new announcement.
  */
+export const FINGER_HYSTERESIS = 1.5;
 export const PRESETS = Object.freeze({
-  'dotpad-x': Object.freeze({ id: 'dotpad-x', label: 'DOT Pad X', minIntervalMs: 150, dwellMs: 0, hysteresis: 0.35 }),
-  'dotpad-gen1': Object.freeze({ id: 'dotpad-gen1', label: 'DOT Pad (Gen-1)', minIntervalMs: 2500, dwellMs: 600, hysteresis: 0.5 }),
+  'dotpad-x': Object.freeze({ id: 'dotpad-x', label: 'DOT Pad X', minIntervalMs: 150, dwellMs: 0, hysteresis: FINGER_HYSTERESIS }),
+  'dotpad-gen1': Object.freeze({ id: 'dotpad-gen1', label: 'DOT Pad (Gen-1)', minIntervalMs: 2500, dwellMs: 600, hysteresis: FINGER_HYSTERESIS }),
 });
 
 /** Default device (the user can switch in the UI). */

@@ -25,7 +25,8 @@ export async function forwardLookup(query, token, proximity, signal) {
     access_token: token,
     language: 'en',
     limit: '5',
-    proximity: `${proximity.lng},${proximity.lat}`,
+    // No view to bias toward (the Audiom page) → let Mapbox bias by IP.
+    proximity: proximity ? `${proximity.lng},${proximity.lat}` : 'ip',
   }).toString();
 
   const response = await fetch(url.toString(), { signal });
@@ -101,4 +102,15 @@ export function featureToLabel(feature) {
     feature.place_name ||
     ''
   );
+}
+
+/**
+ * A Search Box feature's extent as [west, south, east, north], when it has one
+ * (parks, neighbourhoods, cities — not street addresses). Null otherwise.
+ */
+export function featureToBbox(feature) {
+  const b = feature?.properties?.bbox || feature?.bbox;
+  return Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[0] < b[2] && b[1] < b[3]
+    ? b
+    : null;
 }

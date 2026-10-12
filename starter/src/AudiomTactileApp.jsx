@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { parseAudiomId, parseAudiomSources, parseAudiomView, PREDEFINED_SOURCES } from './audiom';
+import { parseAudiomId, parseAudiomSources, parseAudiomView, viewForPlace, PREDEFINED_SOURCES } from './audiom';
+import { forwardLookup, featureToPoint, featureToLabel, featureToBbox } from './lib/geocoding';
 import { AudiomMap } from './AudiomMap';
 import { TactileExplorerGeneric } from './TactileExplorerGeneric';
 import { SliderField } from './components/SliderField';
@@ -21,11 +22,16 @@ import asset from './lib/assetUrl';
  * discovery in particular is gone on purpose: ~90 avatar moves would each be
  * pushed through the pad as a frame. `AudiomProbePanel.jsx` is left unused.
  */
+const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim();
+
 export default function AudiomTactileApp() {
   const [sourceInput, setSourceInput] = useState('/maps/885');
   const [sources, setSources] = useState('');
   const [mapId, setMapId] = useState('');
-  const [view, setView] = useState(null); // { centerLng, centerLat, zoom? } from a pasted URL
+  const [view, setView] = useState(null); // { centerLng, centerLat, zoom?, anchors?, extent? }
+  const [place, setPlace] = useState('');  // geocoded label when the field held an address
+  const [searching, setSearching] = useState(false);
+  const geocodeAbortRef = useRef(null);
   const [error, setError] = useState('');
   const [channel, setChannel] = useState(null);
   const [showRectPanel, setShowRectPanel] = useState(true);
@@ -58,23 +64,58 @@ export default function AudiomTactileApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, [requestSync]);
 
-  function load() {
+  async function load() {
     const raw = String(sourceInput || '').trim();
-    if (!raw) { setError('Enter a map link, an embed id, a source, or a GeoJSON URL.'); return; }
-    setSources(''); setMapId(''); setError('');
+    if (!raw) { setError('Enter a map link, an embed id, a source, a GeoJSON URL, or an address.'); return; }
+    geocodeAbortRef.current?.abort();
+    setSources(''); setMapId(''); setError(''); setPlace('');
 
     // One id namespace since the `/d/` route was removed — see audiom.js.
     const mid = parseAudiomId(raw);
     if (mid) { setView(null); setMapId(mid); return; }
-    // A dynamic source (e.g. osm) loads wherever the embed's center/zoom point,
-    // so carry them over from a pasted `…?sources=osm&center=lng,lat&zoom=z`.
+
+    // Anything that is not a link, an id or a known source is a place to look
+    // up ("golden gate park", "2318 Fillmore St"). Audiom's own address search
+    // is UI-only (Google Places in its map form), so geocode here and hand the
+    // embed an OSM area in its AOI contract.
+    const urlish = /^(https?:)?\/\/|^[/?]|[?&=]/.test(raw);
+    const known = PREDEFINED_SOURCES.some((s) => s.toLowerCase() === raw.toLowerCase());
+    if (!urlish && !known) {
+      if (!MAPBOX_TOKEN) { setError('Address search needs VITE_MAPBOX_TOKEN in .env.'); return; }
+      const ac = new AbortController();
+      geocodeAbortRef.current = ac;
+      setSearching(true);
+      try {
+        const feature = (await forwardLookup(raw, MAPBOX_TOKEN, null, ac.signal))[0];
+        const point = featureToPoint(feature);
+        if (!point) {
+          setError(`No place found for “${raw}”.`);
+          speak(`No place found for ${raw}.`);
+          return;
+        }
+        const label = featureToLabel(feature) || raw;
+        setPlace(label);
+        setView(viewForPlace(point, featureToBbox(feature)));
+        setSources('osm');
+        speak(`Loading the map around ${label}.`);
+      } catch (e) {
+        if (e?.name !== 'AbortError') setError(`Address search failed: ${e.message}`);
+      } finally {
+        if (geocodeAbortRef.current === ac) setSearching(false);
+      }
+      return;
+    }
+    // A dynamic source (e.g. osm) loads the area the URL names, so carry it over
+    // from a pasted `…?sources=osm&center=lng,lat&zoom=z` or an audiom.net
+    // `/map?anchors=…&extent=…` link (no `sources` there: those are OSM maps).
     const v = parseAudiomView(raw);
     setView(v.centerLng != null ? v : null);
-    setSources(parseAudiomSources(raw) || raw);
+    setSources(parseAudiomSources(raw) || (v.anchors && /[?&]anchors=/.test(raw) ? 'osm' : raw));
   }
 
   const pick = (s) => {
-    setSourceInput(s); setSources(s); setMapId(''); setView(null); setError('');
+    geocodeAbortRef.current?.abort();
+    setSourceInput(s); setSources(s); setMapId(''); setView(null); setError(''); setPlace('');
   };
 
   const loaded = sources || mapId;
@@ -116,11 +157,11 @@ export default function AudiomTactileApp() {
           <div className="geocoder">
             <input
               className="geocoder-input"
-              placeholder="/maps/885 · 570 · osm · https://…/data.geojson"
+              placeholder="Golden Gate Park · 2318 Fillmore St · /maps/885 · osm · https://…/data.geojson"
               value={sourceInput}
               onChange={(e) => setSourceInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
-              aria-label="Audiom map, embed id, or data source"
+              aria-label="Address or place, Audiom map, embed id, or data source"
             />
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', margin: '0.5rem 0' }}>
@@ -134,7 +175,10 @@ export default function AudiomTactileApp() {
                 }}>{s}</button>
             ))}
           </div>
-          <button type="button" className="primary-button" onClick={load}>Load</button>
+          <button type="button" className="primary-button" onClick={load} disabled={searching}>
+            {searching ? 'Finding place…' : 'Load'}
+          </button>
+          {place ? <p className="point-meta" aria-live="polite">place: {place} · {view?.extent === 'bbox' ? 'whole area' : 'about 360 m around it'}</p> : null}
           {mapId ? <p className="point-meta">map id {mapId} · /embed/{mapId}</p> : null}
           {!mapId && sources ? <p className="point-meta">source: {sources}</p> : null}
           {error ? <p className="error-text">{error}</p> : null}
@@ -175,7 +219,7 @@ export default function AudiomTactileApp() {
           </label>
           <SliderField
             label={`Pin hysteresis: ${bridge.hysteresis.toFixed(2)} pin`}
-            min={0} max={1} step={0.05}
+            min={0} max={3} step={0.25}
             value={bridge.hysteresis} onChange={bridge.setHysteresis}
           />
           <label className="switch-row">

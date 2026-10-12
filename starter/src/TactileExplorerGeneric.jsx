@@ -9,6 +9,7 @@ import {
 } from './lib/dotpadTemplate';
 import { DOTPAD_GEOMETRY } from './lib/dotpadViewport';
 import { aggregateDetections, detectDotpadLattice, latticeSearch, rgbaToGray } from './lib/dotpadLattice';
+import { WATCHDOG_CONSECUTIVE, createDriftWatchdog, pitchFromCorners, watchdogDue } from './lib/dotpadWatchdog';
 
 const MEDIAPIPE_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const HAND_MODEL_URL =
@@ -32,6 +33,9 @@ const FIND_FRAMES = 5;
 const FIND_MAX_ATTEMPTS = 10;
 const FIND_MAX_MS = 6000;
 const FIND_GIVE_UP = 3;
+// Drift watchdog (lib/dotpadWatchdog.js): its tunables — check interval,
+// hands-off delay, agree / moved thresholds in pins, consecutive count,
+// announcement cooldown — live there as module constants with their rationale.
 
 function waitForOpenCV() {
   return new Promise((resolve) => {
@@ -90,7 +94,11 @@ const cornerPrompt = (name) => `Point at the ${name} corner pin of the DOT Pad a
  * field and text window masked out (they change state and hands cover them).
  *
  * Each frame afterwards: live camera → snapshot (AKAZE homography) → (u, v) in
- * the corner-pin square, emitted RAW through `onUv`. Pin quantization, the
+ * the corner-pin square, emitted RAW through `onUv`. While tracking with no
+ * hand in view, a drift watchdog re-detects the lattice every ~1.5 s and,
+ * when the pad has clearly moved on two checks in a row, re-registers on its
+ * own (lib/dotpadWatchdog.js) — whichever way the corners were first obtained,
+ * and in Fix mode too. Pin quantization, the
  * border band and every avatar move belong to `useDotpadBridge`.
  *
  * Props:
@@ -139,6 +147,14 @@ export function TactileExplorerGeneric({
   const handsOffRef = useRef(null); // { startedAt, zeroSince, minMs, maxMs, then }
   const findRef = useRef(null);     // lattice scan: { startedAt, attempts, results, pitchHint, search }
   const isFixedRef = useRef(false);
+  // Drift watchdog: while tracking with no hand in view, re-detect the lattice
+  // every so often and re-register if the pad has moved (lib/dotpadWatchdog.js).
+  //   search: the in-flight latticeSearch generator; frame / tracked: the
+  //   ImageData it runs on and the tracked corners at that moment.
+  const wdRef = useRef({
+    dog: createDriftWatchdog(), zeroSince: null, lastCheckAt: null,
+    search: null, frame: null, tracked: null, pitchPx: null,
+  });
 
   const s = useRef({
     hl: null, sift: null, bf: null,
@@ -157,8 +173,28 @@ export function TactileExplorerGeneric({
   const [phase, setPhaseState] = useState('idle');
   const [debugInfo, setDebugInfo] = useState({ good: 0, inliers: 0, refKp: 0 });
   const [isFixed, setIsFixed] = useState(false);
+  // Watchdog state for the debug header: kind = idle | checking | verified |
+  // uncertain | disagree | unseen | moved; verifiedAt = last agreement.
+  const [wdInfo, setWdInfo] = useState({ kind: 'idle', at: 0, pins: null, verifiedAt: null, streak: 0 });
+  const [, setClock] = useState(0); // 1 s tick so "verified Ns ago" stays current
 
   const setPhase = (p) => { phaseRef.current = p; setPhaseState(p); };
+
+  useEffect(() => {
+    if (phase !== 'ready') return undefined;
+    const id = setInterval(() => setClock(performance.now()), 1000);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  /** Forget the watchdog's streak and any in-flight check (a new registration starts). */
+  const resetWatchdog = (pitchPx = null) => {
+    const w = wdRef.current;
+    w.dog.reset();
+    w.search = null; w.frame = null; w.tracked = null;
+    w.zeroSince = null; w.lastCheckAt = performance.now();
+    w.pitchPx = pitchPx;
+    setWdInfo({ kind: 'idle', at: 0, pins: null, verifiedAt: null, streak: 0 });
+  };
 
   useEffect(() => { onRegistrationChange?.({ phase, isFixed }); }, [phase, isFixed, onRegistrationChange]);
 
@@ -172,6 +208,7 @@ export function TactileExplorerGeneric({
     pendingRef.current = null;
     findRef.current = null;
     isFixedRef.current = false; setIsFixed(false);
+    resetWatchdog();
   };
 
   const startCapture = () => {
@@ -223,11 +260,12 @@ export function TactileExplorerGeneric({
      * Take the AKAZE reference from the CURRENT frame — called only once the
      * hands are off — with the pin field and braille text window masked out
      * (§6.3). The corners stay in snapshot pixels: the camera is static across
-     * the hands-off gap.
+     * the hands-off gap. `frame` (ImageData) — the drift watchdog passes the
+     * very frame its corners were measured in, so S and C always match.
      */
-    function captureReference(corners) {
+    function captureReference(corners, frame = null) {
       const off = offRef.current;
-      const snap = cv.imread(off);
+      const snap = frame ? cv.matFromImageData(frame) : cv.imread(off);
       const gray = new cv.Mat();
       cv.cvtColor(snap, gray, cv.COLOR_RGBA2GRAY); snap.delete();
 
@@ -348,6 +386,9 @@ export function TactileExplorerGeneric({
 
     function finishReference() {
       captureReference(pendingRef.current);
+      // Fresh registration (corners or auto-find): the watchdog starts over,
+      // keeping a measured pitch if auto-find produced one.
+      resetWatchdog(wdRef.current.pitchPx);
       pendingRef.current = null;
       handsOffRef.current = null;
       setPhase('ready');
@@ -400,6 +441,7 @@ export function TactileExplorerGeneric({
       if (!done) return;
       findRef.current = null;
       const agg = aggregateDetections(f.results);
+      if (agg) wdRef.current.pitchPx = agg.pitchPx; // the watchdog's first pitch hint
       // Always log, per frame: which path ran and why orientation did or didn't settle.
       console.info('[TactileExplorerGeneric] lattice auto-find:', agg ? {
         frames: agg.frames, agreed: agg.agreed, spreadPx: +agg.spreadPx.toFixed(2),
@@ -637,7 +679,8 @@ export function TactileExplorerGeneric({
 
       // ── AKAZE match (every 6 frames) while tracking ────────────────
       st.tick += 1;
-      if (ph === 'ready' && !isFixedRef.current && st.tick % 6 === 0 && st.descTpl?.rows > 0) {
+      const akazeTick = ph === 'ready' && !isFixedRef.current && st.tick % 6 === 0 && st.descTpl?.rows > 0;
+      if (akazeTick) {
         const frameMat = cv.imread(off);
         const frameGray = new cv.Mat();
         cv.cvtColor(frameMat, frameGray, cv.COLOR_RGBA2GRAY); frameMat.delete();
@@ -685,6 +728,11 @@ export function TactileExplorerGeneric({
         descFrame.delete(); kpFrame.delete();
       }
 
+      // ── Drift watchdog: re-measure the corners while hands are off ──
+      // Runs in Fix mode too: Fix freezes AKAZE jitter, it must not hide a
+      // moved pad. Its search step is skipped on AKAZE ticks to spread load.
+      if (ph === 'ready') watchdogStep(handCount, now, akazeTick);
+
       // ── Fingertip -> snapshot -> (u, v), raw ───────────────────────
       let uv = null;
       if (ph === 'ready' && fx !== null && st.Hinv && !st.Hinv.empty() && st.HsnapToUv) {
@@ -702,6 +750,98 @@ export function TactileExplorerGeneric({
       drawDebug(fx, fy);
       drawRectified(fx, fy);
       requestAnimationFrame(loop);
+    }
+
+    /** Registered corners C (snapshot px) through the current Hfwd → live px, or null. */
+    function trackedCorners() {
+      const c = cornersRef.current;
+      if (!c || !st.Hfwd || st.Hfwd.empty()) return null;
+      const d = st.Hfwd.data64F;
+      const Hf = [[d[0], d[1], d[2]], [d[3], d[4], d[5]], [d[6], d[7], d[8]]];
+      const q = c.map((p) => applyH(Hf, p));
+      return q.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y)) ? q : null;
+    }
+
+    /**
+     * Drift watchdog, one step per tick while phase === 'ready'. With no hand
+     * in view for WATCHDOG_HANDS_OFF_MS and WATCHDOG_INTERVAL_MS since the
+     * last check, grab the frame and run `latticeSearch` on it (seeded with the
+     * last known pitch), one generator step per tick exactly like the auto-find
+     * scan, so the render loop never stalls. A hand appearing aborts the check.
+     * The result goes to the pure decision logic (lib/dotpadWatchdog.js);
+     * a confirmed move re-registers exactly like a successful auto-find, from
+     * the frame the corners were measured in. Fix state is kept.
+     */
+    function watchdogStep(handCount, now, busy) {
+      const w = wdRef.current;
+      if (handCount === 0) w.zeroSince ??= now;
+      else w.zeroSince = null;
+
+      if (w.search && handCount > 0) {
+        w.search = null; w.frame = null; w.tracked = null;
+        w.lastCheckAt = now;
+        setWdInfo((i) => ({ ...i, kind: i.verifiedAt ? 'verified' : 'idle' }));
+        return;
+      }
+
+      if (!w.search) {
+        if (busy || !watchdogDue({ now, zeroSince: w.zeroSince, lastCheckAt: w.lastCheckAt }, { intervalMs: w.dog.intervalMs })) return;
+        const tracked = trackedCorners();
+        if (!tracked) return;
+        const off = offRef.current;
+        const { width, height } = off;
+        const frame = off.getContext('2d').getImageData(0, 0, width, height);
+        w.frame = frame;
+        w.tracked = tracked;
+        w.search = latticeSearch(
+          { data: rgbaToGray(frame.data, width, height), width, height },
+          { pitchHint: w.pitchPx || pitchFromCorners(tracked) },
+        );
+        setWdInfo((i) => ({ ...i, kind: 'checking', at: now }));
+        return; // grabbing + grey conversion is this tick's share
+      }
+
+      if (busy) return;
+      let r;
+      try {
+        r = w.search.next();
+      } catch (e) {
+        console.error('[TactileExplorerGeneric] watchdog lattice detection failed:', e);
+        r = { done: true, value: null };
+      }
+      if (!r.done) return;
+
+      const det = r.value, frame = w.frame, tracked = w.tracked;
+      w.search = null; w.frame = null; w.tracked = null;
+      w.lastCheckAt = now;
+      if (det) w.pitchPx = det.pitchPx;
+      const res = w.dog.update(tracked, det, now);
+      const pins = res.pins == null ? null : +res.pins.toFixed(2);
+
+      if (res.action === 'reregister') {
+        captureReference(res.corners, frame);
+        const fixed = isFixedRef.current; // captureReference leaves Fix alone — say so
+        setStatus(fixed ? 'Tracking (Fixed) — DOT Pad moved, re-registered' : 'Tracking — DOT Pad moved, re-registered');
+        if (res.announce) speak('DOT Pad moved — re-registered.');
+        console.info('[TactileExplorerGeneric] drift watchdog: DOT Pad moved — re-registered', {
+          disagreementPins: pins, maxPx: +res.cmp.maxPx.toFixed(1), pitchPx: +res.cmp.pitchPx.toFixed(2),
+          textFound: det.textFound, orientationFromText: res.cmp.textOverride, fixed,
+          tracked: tracked.map((p) => p.map((v) => +v.toFixed(1))),
+          measured: res.corners.map((p) => p.map((v) => +v.toFixed(1))),
+        });
+        setWdInfo({ kind: 'moved', at: now, pins, verifiedAt: now, streak: 0 });
+        return;
+      }
+      if (res.verdict === 'disagree') {
+        console.info('[TactileExplorerGeneric] drift watchdog: corners disagree', {
+          disagreementPins: pins, streak: res.streak, textFound: det.textFound,
+        });
+      }
+      const kind = { agree: 'verified', uncertain: 'uncertain', disagree: 'disagree', none: 'unseen' }[res.verdict];
+      setWdInfo((i) => ({
+        kind, at: now, pins, streak: res.streak,
+        verifiedAt: res.verdict === 'agree' ? now : i.verifiedAt,
+      }));
     }
 
     /**
@@ -907,6 +1047,17 @@ export function TactileExplorerGeneric({
     ? ` (${captureRef.current.index}/4 — ${CORNER_PROMPTS[Math.min(captureRef.current.index, 3)]} pin)`
     : '';
 
+  // Drift-watchdog summary for the debug header (refreshed by the 1 s clock).
+  const ago = (t) => `${Math.max(0, Math.round((performance.now() - t) / 1000))}s ago`;
+  const wdText = phase !== 'ready' ? null
+    : wdInfo.kind === 'checking' ? 'watchdog: checking…'
+      : wdInfo.kind === 'moved' ? `watchdog: moved ${wdInfo.pins} pin → re-registered ${ago(wdInfo.at)}`
+        : wdInfo.kind === 'disagree' ? `watchdog: off by ${wdInfo.pins} pin (${wdInfo.streak}/${WATCHDOG_CONSECUTIVE})`
+          : wdInfo.kind === 'uncertain' ? `watchdog: unsure (${wdInfo.pins} pin)`
+            : wdInfo.kind === 'unseen' ? `watchdog: pins not seen${wdInfo.verifiedAt ? ` · verified ${ago(wdInfo.verifiedAt)}` : ''}`
+              : wdInfo.verifiedAt ? `watchdog: verified ${ago(wdInfo.verifiedAt)}${wdInfo.pins != null ? ` (${wdInfo.pins} pin)` : ''}`
+                : 'watchdog: waiting for hands off';
+
   return (
     <>
       {/* NOT display:none — a hidden video element can be suspended by the
@@ -960,6 +1111,7 @@ export function TactileExplorerGeneric({
             {status}{progress}
             {camInfo ? ` · ${camInfo.w}×${camInfo.h} ${camInfo.state}` : ' · no camera yet'}
             &nbsp;·&nbsp; ref kp: {debugInfo.refKp} &nbsp;·&nbsp; good: {debugInfo.good} &nbsp;·&nbsp; inliers: {debugInfo.inliers}
+            {wdText ? <>&nbsp;·&nbsp;{wdText}</> : null}
             {gestureHint ? <>&nbsp;·&nbsp;<strong>{gestureHint}</strong></> : null}
           </span>
           <button

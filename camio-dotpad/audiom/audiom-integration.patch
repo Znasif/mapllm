@@ -1,0 +1,595 @@
+diff --git a/src/components/MapViewer/MapViewer.tsx b/src/components/MapViewer/MapViewer.tsx
+index b5a82f6..59404c4 100644
+--- a/src/components/MapViewer/MapViewer.tsx
++++ b/src/components/MapViewer/MapViewer.tsx
+@@ -32,6 +32,7 @@ import { ResourceLoader } from '../../modules/ResourceLoader';
+ import { Soundpack } from '../../modules/soundpack';
+ import {
+ 	connectTactileMessageRow,
++	createCamioPointer,
+ 	createDotPadController,
+ 	TactileMessageRow,
+ 	TactileTool,
+@@ -195,6 +196,7 @@ class MapViewer extends React.Component<
+ 	tactileMessageRow: TactileMessageRow | null = null;
+ 	private disconnectTactileMessageRow: (() => void) | null = null;
+ 	dotPadController: ReturnType<typeof createDotPadController> | null = null;
++	camioPointer: ReturnType<typeof createCamioPointer> | null = null;
+ 
+ 	boundActions: { [key: string]: BoundEventMapEntry } = {};
+ 	static contextType = AppContext;
+@@ -538,6 +540,8 @@ class MapViewer extends React.Component<
+ 			),
+ 			onConnectionChange: (connection) => {
+ 				mapState.setDotPadConnection(connection);
++				// The camera pointer is only offered while a DOT Pad is connected.
++				if (connection.state === 'disconnected') this.camioPointer?.stop();
+ 				// The tutorial phrases its prompts for whichever input is in use.
+ 				if (connection.state === 'connected') {
+ 					// Connecting happens from the display options menu. Leave it
+@@ -557,6 +561,13 @@ class MapViewer extends React.Component<
+ 				}
+ 			},
+ 		});
++		this.camioPointer = createCamioPointer({
++			tactileTool: this.tactileTool,
++			announce: (message) => this.speak(message),
++			translate: (code, defaultValue) =>
++				this.props.t(`camio.prompt.${code}`, { defaultValue }),
++			onStatusChange: (status) => mapState.setCamioPointerStatus(status),
++		});
+ 
+ 		this.tools = [
+ 			<AudioOverviewTool
+@@ -873,6 +884,8 @@ class MapViewer extends React.Component<
+ 	};
+ 
+ 	private disposeTactile(): void {
++		this.camioPointer?.dispose();
++		this.camioPointer = null;
+ 		this.dotPadController?.dispose();
+ 		this.dotPadController = null;
+ 		this.disconnectTactileMessageRow?.();
+@@ -898,6 +911,16 @@ class MapViewer extends React.Component<
+ 		this.dotPadController?.disconnect();
+ 	};
+ 
++	public toggleCamioPointer = async (): Promise<void> => {
++		if (this.rootStore.mapState.camioPointerStatus.phase === 'off') {
++			await this.camioPointer?.start();
++		} else this.camioPointer?.stop();
++	};
++
++	public registerCamioPointerByCorners = (): void => {
++		this.camioPointer?.registerByCorners();
++	};
++
+ 	endDemoMode = () => {
+ 		this.rootStore.mapState.setDemoMode(false);
+ 		this.demoSystem.checkAndAdvanceDemoStep('StopTutorialCommand');
+diff --git a/src/stores/MapStateStore.ts b/src/stores/MapStateStore.ts
+index 79c89fc..119fef6 100644
+--- a/src/stores/MapStateStore.ts
++++ b/src/stores/MapStateStore.ts
+@@ -5,7 +5,7 @@ import { MapRef } from 'react-map-gl/maplibre';
+ import type { MapViewer } from '../components/MapViewer/MapViewer';
+ import { DemoSystem } from '../modules/demo';
+ import { SpeechOutput } from '../modules/engine/speech';
+-import type { DotPadConnection } from '../modules/tactile';
++import type { CamioPointerStatus, DotPadConnection } from '../modules/tactile';
+ import { MapWorld } from '../modules/world';
+ import { MapFeature } from '../modules/world/MapFeature';
+ import type { LngLat } from '../types/coordinates';
+@@ -60,6 +60,7 @@ export default class MapState {
+ 	showObjectLabels: boolean = true;
+ 	showTactilePinView: boolean = false;
+ 	dotPadConnection: DotPadConnection = { state: 'disconnected' };
++	camioPointerStatus: CamioPointerStatus = { phase: 'off' };
+ 	hasIllustratedBaseLayer: boolean = false;
+ 	showIllustratedBaseLayer: boolean = true;
+ 	preExpandedState: {
+@@ -98,6 +99,7 @@ export default class MapState {
+ 			showObjectLabels: observable,
+ 			showTactilePinView: observable,
+ 			dotPadConnection: observable.ref,
++			camioPointerStatus: observable.ref,
+ 			hasIllustratedBaseLayer: observable,
+ 			showIllustratedBaseLayer: observable,
+ 			preExpandedState: observable,
+@@ -122,6 +124,7 @@ export default class MapState {
+ 			toggleObjectLabels: action,
+ 			toggleTactilePinView: action,
+ 			setDotPadConnection: action,
++			setCamioPointerStatus: action,
+ 			setHasIllustratedBaseLayer: action,
+ 			setShowIllustratedBaseLayer: action,
+ 			saveExpandState: action,
+@@ -226,6 +229,18 @@ export default class MapState {
+ 		this.mapViewer.disconnectDotPad();
+ 	}
+ 
++	setCamioPointerStatus(status: CamioPointerStatus) {
++		this.camioPointerStatus = status;
++	}
++
++	toggleCamioPointer(): Promise<void> {
++		return this.mapViewer.toggleCamioPointer();
++	}
++
++	registerCamioPointerByCorners(): void {
++		this.mapViewer.registerCamioPointerByCorners();
++	}
++
+ 	setHasIllustratedBaseLayer(value: boolean) {
+ 		this.hasIllustratedBaseLayer = value;
+ 	}
+diff --git a/src/modules/tactile/index.ts b/src/modules/tactile/index.ts
+index c34eefa..8bd3b87 100644
+--- a/src/modules/tactile/index.ts
++++ b/src/modules/tactile/index.ts
+@@ -1,4 +1,8 @@
+ export { createTactileOrientationCalibrationFrame } from './calibration';
++export {
++	type CamioPointerStatus,
++	createCamioPointer,
++} from './camio/createCamioPointer';
+ export { connectTactileMessageRow } from './connectTactileMessageRow';
+ export { createDotPadController } from './dotPad/createDotPadController';
+ export type {
+diff --git a/src/components/MapMenu/DotPadControls.tsx b/src/components/MapMenu/DotPadControls.tsx
+index a7bb5de..b0ab8c8 100644
+--- a/src/components/MapMenu/DotPadControls.tsx
++++ b/src/components/MapMenu/DotPadControls.tsx
+@@ -9,6 +9,16 @@ export interface DotPadControlLabels {
+ 	cancel: string;
+ }
+ 
++/** The camera fingertip pointer, offered while a DOT Pad is connected. */
++export interface CameraPointerControl {
++	on: boolean;
++	label: string;
++	registerLabel: string;
++	statusLabel: string;
++	onToggle(): Promise<void>;
++	onRegister(): void;
++}
++
+ export interface DotPadControlsProps {
+ 	connectionState: 'disconnected' | 'connecting' | 'connected' | 'error';
+ 	statusLabel: string;
+@@ -18,6 +28,7 @@ export interface DotPadControlsProps {
+ 	onDisconnect(): void;
+ 	/** Called on mount to warm the lazily loaded DOT Pad support. */
+ 	onPreload(): void;
++	cameraPointer?: CameraPointerControl;
+ }
+ 
+ function reportActionError(error: unknown): void {
+@@ -68,6 +79,7 @@ export function DotPadControls({
+ 	onConnectBle,
+ 	onDisconnect,
+ 	onPreload,
++	cameraPointer,
+ }: DotPadControlsProps) {
+ 	const connecting = connectionState === 'connecting';
+ 	const connected = connectionState === 'connected';
+@@ -118,6 +130,36 @@ export function DotPadControls({
+ 					</button>
+ 				</>
+ 			)}
++			{connected && cameraPointer ? (
++				<>
++					<button
++						type="button"
++						className={`${styles.optionItem} ${styles.deviceAction}`}
++						role="menuitemcheckbox"
++						aria-checked={cameraPointer.on}
++						onKeyDown={handleHardwareActionKeyDown}
++						onClick={() => {
++							cameraPointer.onToggle().catch(reportActionError);
++						}}
++					>
++						{cameraPointer.label}
++					</button>
++					{cameraPointer.on ? (
++						<button
++							type="button"
++							className={`${styles.optionItem} ${styles.deviceAction}`}
++							role="menuitem"
++							onKeyDown={handleHardwareActionKeyDown}
++							onClick={cameraPointer.onRegister}
++						>
++							{cameraPointer.registerLabel}
++						</button>
++					) : null}
++					<p className={styles.deviceStatus} role="status" aria-live="polite">
++						{cameraPointer.statusLabel}
++					</p>
++				</>
++			) : null}
+ 		</section>
+ 	);
+ }
+diff --git a/src/components/MapMenu/DisplayOptionsMenu.tsx b/src/components/MapMenu/DisplayOptionsMenu.tsx
+index 28919db..4dc6042 100644
+--- a/src/components/MapMenu/DisplayOptionsMenu.tsx
++++ b/src/components/MapMenu/DisplayOptionsMenu.tsx
+@@ -216,6 +216,17 @@ export const DisplayOptionsMenu = inject('rootStore')(
+ 			defaultValue: 'Unavailable',
+ 		});
+ 		const preloadDotPad = useCallback(() => mapState.preloadDotPad(), [mapState]);
++		const camioStatus = mapState.camioPointerStatus;
++		const cameraPointer = {
++			on: camioStatus.phase !== 'off',
++			label: t('mainMenu.displayOptions.dotPad.cameraPointer'),
++			registerLabel: t('mainMenu.displayOptions.dotPad.cameraPointerRegister'),
++			statusLabel: t(
++				`camio.status.${'tracking' in camioStatus && camioStatus.phase === 'ready' ? camioStatus.tracking : camioStatus.phase}`,
++			),
++			onToggle: () => mapState.toggleCamioPointer(),
++			onRegister: () => mapState.registerCamioPointerByCorners(),
++		};
+ 		const dotPadConnection = mapState.dotPadConnection;
+ 		const dotPadStatusLabel = (() => {
+ 			switch (dotPadConnection.state) {
+@@ -474,6 +485,7 @@ export const DisplayOptionsMenu = inject('rootStore')(
+ 							onConnectBle={() => mapState.connectDotPadBle()}
+ 							onDisconnect={() => mapState.disconnectDotPad()}
+ 							onPreload={preloadDotPad}
++							cameraPointer={cameraPointer}
+ 						/>
+ 					</div>
+ 				</MenuList>
+diff --git a/public/locales/en/translation.json b/public/locales/en/translation.json
+index d5b00ca..8c5e4bd 100644
+--- a/public/locales/en/translation.json
++++ b/public/locales/en/translation.json
+@@ -1603,7 +1603,9 @@
+ 				"connectedX": "Connected to DOT Pad X. Refresh time: {{refreshTime}} milliseconds.",
+ 				"connectedGen1": "Connected to first-generation DOT Pad. Refresh time: {{refreshTime}} milliseconds.",
+ 				"error": "DOT Pad error: {{message}}",
+-				"genOneUpdate": "Lift your hands while the DOT Pad updates."
++				"genOneUpdate": "Lift your hands while the DOT Pad updates.",
++				"cameraPointer": "Camera pointer",
++				"cameraPointerRegister": "Register DOT Pad by its corners"
+ 			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+@@ -3480,5 +3482,54 @@
+ 			"styleBoth": "Colours and patterns",
+ 			"styleNone": "Neither"
+ 		}
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Take your hands off the DOT Pad.",
++				"searching": "Looking for the DOT Pad pins.",
++				"corner": {
++					"topLeft": "Point at the top-left corner pin of the DOT Pad and hold.",
++					"topRight": "Point at the top-right corner pin and hold.",
++					"bottomRight": "Point at the bottom-right corner pin and hold.",
++					"bottomLeft": "Point at the bottom-left corner pin and hold."
++				},
++				"cornersRejected": "Those corners don't look like the pin area. Let's try again.",
++				"liftHand": "Got it. Lift your hand for a moment.",
++				"confirmTopLeft": "Found the DOT Pad. Touch the top-left pin and hold.",
++				"confirmMissed": "That wasn't near a corner pin. Let's register by the corners instead.",
++				"notFound": "I couldn't find the DOT Pad. Try registering it by its corners.",
++				"done": "DOT Pad registered. Point at the pins.",
++				"cancelled": "Registration cancelled."
++			},
++			"pointing": {
++				"oneHand": "Point with only one hand."
++			},
++			"tracking": {
++				"lost": "Lost track of the DOT Pad. Take your hands off it for a moment.",
++				"restored": "Found the DOT Pad again.",
++				"moved": "The DOT Pad moved. Re-registered.",
++				"pinsNotVisible": "I can't see the pins, so moving the DOT Pad won't be noticed until they are visible."
++			},
++			"camera": {
++				"noFrames": "The camera opened but sent no pictures. Close other apps using it and try again.",
++				"denied": "Camera access was blocked. Allow the camera for this page to use the pointer."
++			}
++		},
++		"status": {
++			"off": "Camera pointer off.",
++			"starting": "Starting the camera.",
++			"idle": "Camera on. The DOT Pad is not registered.",
++			"corners": "Registering the corners.",
++			"autoFind": "Looking for the DOT Pad.",
++			"confirm": "Touch the top-left pin to confirm.",
++			"handsOff": "Lift your hand.",
++			"none": "Camera on.",
++			"tracking": "Following the DOT Pad.",
++			"occluded": "Following the DOT Pad (partly covered).",
++			"static": "Pins not visible; not following the DOT Pad.",
++			"lost": "Lost the DOT Pad.",
++			"fixed": "Position fixed."
++		}
+ 	}
+ }
+diff --git a/src/lib/build-embed-string.ts b/src/lib/build-embed-string.ts
+index 47b3d73..cdd5e4d 100644
+--- a/src/lib/build-embed-string.ts
++++ b/src/lib/build-embed-string.ts
+@@ -34,5 +34,5 @@ export const buildDefinitionEmbedString = ({
+ 		? `${definitionSlug}-${definitionId}`
+ 		: String(definitionId);
+ 	const src = `${server}/embed/${segment}${query ? `?${query}` : ''}`;
+-	return `<iframe title="${name}" src="${src}" width="${width}" height="${height}" style="border: 0" allowfullscreen></iframe>`;
++	return `<iframe title="${name}" src="${src}" width="${width}" height="${height}" style="border: 0" allow="camera; fullscreen" allowfullscreen></iframe>`;
+ };
+diff --git a/documentation/embedding.md b/documentation/embedding.md
+index 33a6a2d..7d90377 100644
+--- a/documentation/embedding.md
++++ b/documentation/embedding.md
+@@ -593,3 +593,8 @@ For fullscreen to work inside an iframe, include `allowfullscreen` or
+ 
+ Without iframe fullscreen permission, users hear "Fullscreen is not available"
+ when they try to enter fullscreen mode.
++
++The DOT Pad camera pointer needs the camera inside the iframe, so the generated
++snippet also carries `allow="camera; fullscreen"`. Without `camera` the browser
++refuses the camera and Audiom says so; everything else keeps working. Video is
++processed on the device and never leaves the browser.
+diff --git a/src/modules/tactile/camio/createCamioPointer.ts b/src/modules/tactile/camio/createCamioPointer.ts
+new file mode 100644
+index 0000000..d7c8314
+--- /dev/null
++++ b/src/modules/tactile/camio/createCamioPointer.ts
+@@ -0,0 +1,116 @@
++import { worldPosition } from '../../../types/coordinates';
++import type {
++	DotPadPointer,
++	PointerStatus,
++} from '../../../vendor/camio/CamioDotPad-0.1.0.js';
++import type { TactileTool } from '../TactileTool';
++import { tactileWorldBounds } from '../viewport';
++
++export type CamioPointerStatus = PointerStatus | { phase: 'off' | 'starting' };
++
++export interface CreateCamioPointerOptions {
++	tactileTool: TactileTool;
++	announce(message: string): void;
++	/** Localise a library prompt code, e.g. t(`camio.prompt.${code}`, { defaultValue }). */
++	translate(code: string, defaultValue: string): string;
++	onStatusChange(status: CamioPointerStatus): void;
++	/** Where public/vendor/mediapipe is served. */
++	assetsBase?: string;
++}
++
++/**
++ * Camera pointer for the DOT Pad: the pin under a pointing fingertip moves the
++ * avatar there. The vendored library (and the bundled MediaPipe JS in it) is a
++ * lazy chunk, loaded only when the pointer is first started; all camera
++ * processing stays on the device.
++ */
++export function createCamioPointer(options: CreateCamioPointerOptions) {
++	const { renderer } = options.tactileTool;
++	let pointer: DotPadPointer | null = null;
++	let loadPromise: Promise<DotPadPointer> | null = null;
++	let deactivate: (() => void) | null = null;
++	let disposed = false;
++
++	const load = () => {
++		loadPromise ??= import(
++			/* webpackChunkName: "camio-dotpad" */ '../../../vendor/camio/CamioDotPad-0.1.0.js'
++		).then(({ createDotPadPointer }) => {
++			if (disposed) throw new Error('Camio pointer was disposed');
++			const created = createDotPadPointer({
++				assetsBase: options.assetsBase ?? '/vendor/mediapipe/',
++				border: renderer.viewport.overlapPins,
++			});
++			created.on('prompt', ({ code, text }) =>
++				options.announce(options.translate(code, text)),
++			);
++			created.on('status', (status) => options.onStatusChange(status));
++			created.on('pin', ({ x, y, inBorder }) => {
++				// The overlap band pages the viewport: a finger resting there must not.
++				if (inBorder) return;
++				const { viewport, world } = renderer;
++				const bounds = tactileWorldBounds(viewport);
++				world.avatar.setPosition(
++					worldPosition(
++						bounds.left + x * viewport.metersPerPin,
++						bounds.top - y * viewport.metersPerPin,
++					),
++				);
++			});
++			pointer = created;
++			return created;
++		});
++		const pending = loadPromise;
++		// A failed chunk load must not stay cached (same as the DOT Pad SDK).
++		pending.catch(() => {
++			if (loadPromise === pending) loadPromise = null;
++		});
++		return pending;
++	};
++
++	const stop = () => {
++		pointer?.stop();
++		deactivate?.();
++		deactivate = null;
++		options.onStatusChange({ phase: 'off' });
++	};
++
++	return {
++		preload: () => {
++			if (disposed) return;
++			load().catch(() => {
++				// A preload failure is silent: start() reports it.
++			});
++		},
++		/** Load, open the camera, and auto-register if not registered yet. */
++		start: async () => {
++			if (disposed) return;
++			options.onStatusChange({ phase: 'starting' });
++			try {
++				const loaded = await load();
++				// Keep the pin frame live while the camera drives the avatar.
++				deactivate ??= renderer.activate();
++				await loaded.start();
++				options.onStatusChange(loaded.status);
++				if (!loaded.registration) void loaded.autoRegister();
++			} catch (error) {
++				stop();
++				throw error;
++			}
++		},
++		stop,
++		get active() {
++			return pointer?.running ?? false;
++		},
++		autoRegister: () => pointer?.autoRegister(),
++		registerByCorners: () => pointer?.registerByCorners(),
++		cancelRegistration: () => pointer?.cancel(),
++		dispose: () => {
++			disposed = true;
++			deactivate?.();
++			deactivate = null;
++			pointer?.dispose();
++			pointer = null;
++			loadPromise = null;
++		},
++	};
++}
+diff --git a/src/modules/tactile/camio/createCamioPointer.test.ts b/src/modules/tactile/camio/createCamioPointer.test.ts
+new file mode 100644
+index 0000000..4701e9b
+--- /dev/null
++++ b/src/modules/tactile/camio/createCamioPointer.test.ts
+@@ -0,0 +1,131 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import type { TactileTool } from '../TactileTool';
++import { tactileWorldBounds, worldToPin } from '../viewport';
++import { createCamioPointer } from './createCamioPointer';
++
++type Listener = (payload: never) => void;
++
++const mocked = vi.hoisted(() => ({
++	listeners: new Map<string, Listener>(),
++	start: vi.fn(async () => {}),
++	stop: vi.fn(),
++	dispose: vi.fn(),
++	autoRegister: vi.fn(async () => null),
++	registration: null as unknown,
++	options: null as unknown,
++}));
++
++vi.mock('../../../vendor/camio/CamioDotPad-0.1.0.js', () => ({
++	createDotPadPointer: (options: unknown) => {
++		mocked.options = options;
++		return {
++			on: (type: string, listener: Listener) => {
++				mocked.listeners.set(type, listener);
++				return () => {};
++			},
++			start: mocked.start,
++			stop: mocked.stop,
++			dispose: mocked.dispose,
++			autoRegister: mocked.autoRegister,
++			registerByCorners: vi.fn(),
++			cancel: vi.fn(),
++			get registration() {
++				return mocked.registration;
++			},
++			status: { phase: 'idle', tracking: 'none' },
++			running: true,
++		};
++	},
++}));
++
++const emit = (type: string, payload: unknown) =>
++	(mocked.listeners.get(type) as (p: unknown) => void)(payload);
++
++const makeHarness = () => {
++	const viewport = {
++		center: [100, 50],
++		width: 60,
++		height: 40,
++		metersPerPin: 0.5,
++		overlapPins: 2,
++	};
++	const setPosition = vi.fn();
++	const deactivate = vi.fn();
++	const tactileTool = {
++		renderer: {
++			viewport,
++			world: { avatar: { setPosition } },
++			activate: vi.fn(() => deactivate),
++		},
++	} as unknown as TactileTool;
++	const announce = vi.fn();
++	const onStatusChange = vi.fn();
++	const pointer = createCamioPointer({
++		tactileTool,
++		announce,
++		translate: (code, text) => `[${code}] ${text}`,
++		onStatusChange,
++	});
++	return {
++		pointer,
++		viewport,
++		setPosition,
++		deactivate,
++		announce,
++		onStatusChange,
++	};
++};
++
++beforeEach(() => {
++	mocked.listeners.clear();
++	mocked.registration = null;
++	vi.clearAllMocks();
++});
++
++describe('createCamioPointer', () => {
++	it('loads lazily, starts the camera and auto-registers when unregistered', async () => {
++		const { pointer } = makeHarness();
++		expect(mocked.options).toBeNull();
++		await pointer.start();
++		expect(mocked.options).toMatchObject({
++			assetsBase: '/vendor/mediapipe/',
++			border: 2,
++		});
++		expect(mocked.start).toHaveBeenCalledOnce();
++		expect(mocked.autoRegister).toHaveBeenCalledOnce();
++	});
++
++	it('moves the avatar onto the pointed pin (inverse of worldToPin), never in the border', async () => {
++		const { pointer, viewport, setPosition } = makeHarness();
++		await pointer.start();
++		emit('pin', { x: 17, y: 9, inBorder: false });
++		const [position] = setPosition.mock.calls[0];
++		const bounds = tactileWorldBounds(viewport as never);
++		expect(position).toEqual([bounds.left + 17 * 0.5, bounds.top - 9 * 0.5]);
++		expect(worldToPin(position, viewport as never)).toEqual([17, 9]);
++		emit('pin', { x: 1, y: 9, inBorder: true });
++		expect(setPosition).toHaveBeenCalledOnce();
++	});
++
++	it('announces localised prompts and forwards status', async () => {
++		const { pointer, announce, onStatusChange } = makeHarness();
++		await pointer.start();
++		emit('prompt', { code: 'register.done', text: 'DOT Pad registered.' });
++		expect(announce).toHaveBeenCalledWith('[register.done] DOT Pad registered.');
++		emit('status', { phase: 'ready', tracking: 'tracking' });
++		expect(onStatusChange).toHaveBeenLastCalledWith({
++			phase: 'ready',
++			tracking: 'tracking',
++		});
++	});
++
++	it('stop and dispose release the camera and the renderer', async () => {
++		const { pointer, deactivate } = makeHarness();
++		await pointer.start();
++		pointer.stop();
++		expect(mocked.stop).toHaveBeenCalled();
++		expect(deactivate).toHaveBeenCalledOnce();
++		pointer.dispose();
++		expect(mocked.dispose).toHaveBeenCalledOnce();
++	});
++});

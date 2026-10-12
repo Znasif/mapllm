@@ -70,6 +70,8 @@ jobs:
         env:
           # Project Pages serve from /<repo>/ — configure-pages resolves it.
           VITE_BASE: ${{ steps.pages.outputs.base_path }}
+          # Only used for free-text address search on audiom.html (map ids, URLs
+          # and predefined sources work without it).
           # Public by design; restrict it by URL in the Mapbox dashboard.
           # The account's DEFAULT public token cannot take URL restrictions —
           # generate a new one.
@@ -78,29 +80,9 @@ jobs:
           # DOM no matter what. Use a domain-restricted embed key.
           VITE_AUDIOM_KEY: ${{ secrets.VITE_AUDIOM_KEY }}
           VITE_AUDIOM_EMBED_URL: ${{ secrets.VITE_AUDIOM_EMBED_URL }}
-          # The chat tier CANNOT fall back to its profile's Hugging Face source
-          # on Pages. That source is unsloth's SINGLE 2.62 GB file, and a single
-          # file walks into wllama's 2 GB ArrayBuffer cap: the tokenizer loads,
-          # then context creation aborts the whole WASM module with
-          # `GGML_ASSERT(ctx_tgt != nullptr)` — uncatchable, so the tab is dead.
-          # Only the 5-shard split works. Hence an explicit URL at the FIRST
-          # shard; wllama reads the `-00001-of-00005` suffix and fetches the
-          # other four itself.
-          #
-          # Verified by HEAD 2026-08-13 from Origin https://znasif.github.io:
-          # all five 302 -> 200, byte counts exact, `access-control-allow-origin: *`
-          # on the CDN, `accept-ranges: bytes`. Re-verify before changing it:
-          #   curl -sSIL <url> | grep -E 'HTTP|content-length'
-          VITE_MODEL_URL: 'https://huggingface.co/znasif/gemma-4-E2B-it-qat-Q4_K_XL-split/resolve/main/e2b-q4-00001-of-00005.gguf'
-          # Empty string = "this build has no LOCAL weights for the embed tier",
-          # which is the truth on Pages: dist can hold neither (100 MB file
-          # limit, 1 GB site limit, both enforced by the step below). Emptying
-          # it makes the profile's Hugging Face source take over, and for l1
-          # that source is fine — a 333 MB single file, comfortably under the
-          # 2 GB cap. Left UNSET instead, the dev url `/models/…gguf` would be
-          # requested against the site root, 404, and only then fall back — a
-          # wasted round trip and an alarming console error on every load.
-          VITE_EMBED_URL: ''
+          # Build only audiom.html — index.html and the local-LLM stack behind it
+          # are not published. See the input switch in starter/vite.config.js.
+          VITE_PAGES_ENTRY: audiom
         run: npm run build
 
       - name: Check artifact against Pages limits

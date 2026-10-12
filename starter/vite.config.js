@@ -110,12 +110,16 @@ export default defineConfig(async () => ({
   publicDir: 'resources',
   build: {
     rollupOptions: {
-      input: {
-        // Mapbox-driven tactile pin grid
-        main: resolve('index.html'),
-        // Generalized "any Audiom map" tactile explorer
-        audiom: resolve('audiom.html'),
-      },
+      // VITE_PAGES_ENTRY=audiom (set by the Pages workflow) ships only the Audiom
+      // explorer, so the local-LLM code behind index.html never reaches the site.
+      input: process.env.VITE_PAGES_ENTRY === 'audiom'
+        ? { audiom: resolve('audiom.html') }
+        : {
+            // Mapbox-driven tactile pin grid
+            main: resolve('index.html'),
+            // Generalized "any Audiom map" tactile explorer
+            audiom: resolve('audiom.html'),
+          },
     },
   },
   server: {
