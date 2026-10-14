@@ -60,7 +60,8 @@ function statusText(st) {
  * library's prompts to `announce` (the page's live region — nothing here
  * speaks). The controls live in the host's sidebar through `actionsRef`
  * ({ register, toggleFixed, retry }) and `onStatus`; this component renders
- * only the hidden video and the camera debug overlay for a sighted helper.
+ * only the hidden video and the camera debug overlay (plus its small-screen
+ * show/hide toggle) for a sighted helper.
  * Keys: R register, ; fix (dead while focus is inside the Audiom iframe).
  */
 export function CamioPointerPanel({
@@ -78,6 +79,9 @@ export function CamioPointerPanel({
   const [camInfo, setCamInfo] = useState(null);
   const [pst, setPst] = useState(null); // the library's PointerStatus
   const [cell, setCell] = useState(null); // last 'point' [col, row], for the overlay
+  // Small screens only: the preview sits in flow below the map and a helper can
+  // hide it. The toggle is display:none on desktop, where it stays an overlay.
+  const [showPreview, setShowPreview] = useState(true);
 
   const phase = pst?.phase || 'idle';
   const isFixed = !!pst?.fixed;
@@ -176,7 +180,9 @@ export function CamioPointerPanel({
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const p = pointerRef.current;
-      if (p?.running && debugRef.current) p.drawDebug(debugRef.current);
+      const c = debugRef.current;
+      // offsetWidth is 0 while the preview is hidden (display: none).
+      if (p?.running && c && c.offsetWidth) p.drawDebug(c);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -203,17 +209,34 @@ export function CamioPointerPanel({
         }}
       />
 
-      {/* For a sighted helper: the camera frame, the registered sheet and the fingertip. */}
-      <div className="tactile-debug-panel" aria-hidden="true">
-        <div className="tactile-debug-header">
-          <span>
-            camera · {status}
-            {camInfo ? ` · ${camInfo.w}×${camInfo.h} ${camInfo.state}` : ''}
-            {cell ? ` · cell ${cell[0]},${cell[1]}` : ''}
-            {gestureHint ? <>&nbsp;·&nbsp;<strong>{gestureHint}</strong></> : null}
-          </span>
+      {/* For a sighted helper: the camera frame, the registered sheet and the fingertip.
+          Desktop: an overlay at the map's bottom-left (the wrapper is unstyled).
+          ≤980px: in flow below the map, with a show/hide toggle (styles.css). */}
+      <div className="camio-preview">
+        <button
+          type="button"
+          className="camio-preview-toggle"
+          aria-expanded={showPreview}
+          aria-controls="camio-preview-panel"
+          onClick={() => setShowPreview((s) => !s)}
+        >
+          {showPreview ? 'Hide camera' : 'Show camera'}
+        </button>
+        <div
+          id="camio-preview-panel"
+          className={`tactile-debug-panel${showPreview ? '' : ' is-collapsed'}`}
+          aria-hidden="true"
+        >
+          <div className="tactile-debug-header">
+            <span>
+              camera · {status}
+              {camInfo ? ` · ${camInfo.w}×${camInfo.h} ${camInfo.state}` : ''}
+              {cell ? ` · cell ${cell[0]},${cell[1]}` : ''}
+              {gestureHint ? <>&nbsp;·&nbsp;<strong>{gestureHint}</strong></> : null}
+            </span>
+          </div>
+          <canvas ref={debugRef} width={320} className="tactile-debug-canvas" />
         </div>
-        <canvas ref={debugRef} width={320} className="tactile-debug-canvas" />
       </div>
     </>
   );

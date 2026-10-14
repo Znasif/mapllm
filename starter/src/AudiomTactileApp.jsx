@@ -57,8 +57,10 @@ export default function AudiomTactileApp() {
 
   const ready = camera.phase === 'ready';
 
+  // ≤980px, styles.css flattens the sidebar (display: contents) and reorders:
+  // header, status, Camera, the map, the camera preview, then How to use.
   return (
-    <div className="app-shell">
+    <div className="app-shell app-shell--audiom">
       <aside className="sidebar">
         <header className="sidebar-header">
           <div>
@@ -83,7 +85,7 @@ export default function AudiomTactileApp() {
           </p>
         </section>
 
-        <section className="panel-section">
+        <section className="panel-section camera-section">
           <h2>Camera</h2>
           <p className="point-meta" style={{ fontSize: '0.95rem' }}>{camera.text}</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', margin: '0.5rem 0' }}>
@@ -97,16 +99,16 @@ export default function AudiomTactileApp() {
               <button type="button" onClick={() => actionsRef.current?.retry()}>Retry camera</button>
             )}
           </div>
-          <p className="subtle" style={{ fontSize: '0.75rem' }}>
+          <p className="subtle keyboard-hint" style={{ fontSize: '0.75rem' }}>
             Keys work while focus is outside the map (<kbd>Shift</kbd>+<kbd>Tab</kbd> out of it).
           </p>
         </section>
 
-        <section className="panel-section compact">
+        <section className="panel-section compact howto-section">
           <h2>How to use</h2>
           <ol className="entrance-list" style={{ listStyle: 'decimal', paddingLeft: '1.25rem' }}>
             <li>Print the map and lay it under the camera.</li>
-            <li>Press <kbd>R</kbd>, then point at each corner mark and hold: top-left, top-right, bottom-right, bottom-left.</li>
+            <li>Tap <strong>Register corners</strong> (or press <kbd>R</kbd>), then point at each corner mark and hold: top-left, top-right, bottom-right, bottom-left.</li>
             <li>Point at the map to move the avatar.</li>
             <li>Open your hand to stop speech.</li>
           </ol>
