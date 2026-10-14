@@ -3,32 +3,24 @@ import {
   MEDIAPIPE_VERSION, OPENCV_VERSION, PROMPTS, createCamioPointer,
 } from './vendor/camio/CamioPointer-0.2.0.js';
 import { openCameraStream } from './cameraDevices';
-import { cancelSpeech } from './lib/speak';
 import { CORNER_PROMPTS } from './lib/cornerRegistration';
-import { uvFromPose } from './lib/camioUv';
-import { DOTPAD_GEOMETRY } from './lib/dotpadViewport';
 
 // Assets from the CDN. The WASM must match the MediaPipe build bundled into the
-// library; the model is the same file TactileExplorerGeneric loads. OpenCV.js
-// is only fetched for a rect surface — never on the DOT Pad used here.
+// library. OpenCV.js (AKAZE tracking of the sheet, in a worker) is fetched on
+// start() because the surface is a rect.
 const MEDIAPIPE_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`;
 const HAND_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const OPENCV_URL = `https://cdn.jsdelivr.net/npm/@techstark/opencv-js@${OPENCV_VERSION}/dist/opencv.js`;
 
-const PIN_COLS = DOTPAD_GEOMETRY.W;
-const PIN_ROWS = DOTPAD_GEOMETRY.H;
-const BAND = DOTPAD_GEOMETRY.o;
+// Minimum time between two moves: the library's send gate (the same gate the
+// old bridge used, at its 150 ms default). The library also holds 1.5 cells
+// (2.5 mm each) of hysteresis and emits a 'point' only when the cell changes.
+const MIN_INTERVAL_MS = 150;
 
-// Library phases → the names TactileExplorerGeneric reports to the host.
-const PHASE_NAMES = {
-  idle: 'idle', corners: 'capturing', autoFind: 'autofind', confirm: 'confirm', handsOff: 'handsoff', ready: 'ready',
-};
+const NOOP = () => {};
 
-const NO_ANNOUNCE = () => {};
-
-// Same corner-lock beep as TactileExplorerGeneric (a sound cue, not an
-// instruction — it stays).
+// Corner-lock beep (a sound cue, not an instruction).
 let _ac;
 const beep = () => {
   try {
@@ -40,129 +32,100 @@ const beep = () => {
   } catch { /* noop */ }
 };
 
-/** Status line from the library's status (TactileExplorerGeneric's wording where it has one). */
+/** Short status line from the library's status. */
 function statusText(st) {
   switch (st.phase) {
-    case 'corners': return 'Registering DOT Pad corners';
-    case 'autoFind': return st.message === 'Hands off' ? 'Auto-find: hands off the pad' : 'Auto-find: looking for the pins…';
-    case 'confirm': return 'Found the pins, but not which way up — touch the top-left pin';
-    case 'handsOff': return 'Lift your hand…';
+    case 'corners': return `Registering corners (${st.cornersLocked}/4, ${CORNER_PROMPTS[Math.min(st.cornersLocked, 3)]})`;
+    case 'handsOff': return 'Lift your hand';
     case 'ready':
       switch (st.tracking) {
-        case 'fixed': return 'Tracking (Fixed)';
-        case 'lost': return 'DOT Pad lost — hands off for a moment';
-        case 'static': return 'Tracking (pins not visible — holding the registration)';
-        case 'occluded': return 'Tracking (pins covered)';
-        default: return 'Tracking';
+        case 'fixed': return 'Ready (fixed)';
+        case 'loading': return 'Ready (loading tracker)';
+        case 'static': return 'Ready (not following the sheet)';
+        case 'occluded': return 'Ready (sheet covered)';
+        default: return 'Ready';
       }
-    default: return st.registered ? 'Registered' : 'Ready — press R (corners) or A (auto-find).';
+    default: return st.registered ? 'Registered' : 'Not registered. Press R.';
   }
 }
 
 /**
- * The camio-pointer library (src/vendor/camio) as a drop-in for
- * TactileExplorerGeneric: same props, controls and keys (r / a / ;), same
- * `onUv` contract. Selected with `audiom.html?pointer=camio`.
+ * Camera pointer for the printed map: the camio-pointer library
+ * (src/vendor/camio) on a `{ kind: 'rect' }` surface.
  *
- * The library owns registration (corners or lattice auto-find), tracking (the
- * pin-lattice follower, no OpenCV), the drift watchdog and the pointing
- * gesture. Its 'point' event fires only when the pin changes, but the bridge's
- * quantizer and send gate (dwell, min interval) expect a sample every frame —
- * so each animation frame the pointing fingertip is mapped through the
- * library's current pose to fractional pins (fx, fy), exactly as the library
- * computes the fx / fy of its 'point' events, and sent as
- *   u = fx / (cols − 1), v = fy / (rows − 1)   (lib/camioUv.js)
- * (corner-pin CENTRES = 0 / 1, TactileExplorerGeneric's convention). It is
- * sent only while the library has a current point (registered, not lost,
- * pointing, on the pad), else null. Library `hysteresis: 0` so the bridge's
- * preset / slider stays the only pin hysteresis.
- *
- * Prompts (the library's default English) and the camera-denied error go to
- * the host's `announce` — on audiom.html an ARIA live region; the page itself
- * never speaks, the Audiom map does the talking. An open hand still calls
- * cancelSpeech() (the user's "open hand stops speech" gesture); with nothing
- * of the page's own speaking it is a no-op unless the hidden mic path spoke.
+ * Registration is the library's corner dwell (TL → TR → BR → BL); it then
+ * follows the sheet with AKAZE (OpenCV.js in a worker) and emits a 'point'
+ * `{ u, v }` when the pointing fingertip changes cell. This component only
+ * relays: `onPoint` (the host maps it to the avatar), `onOpenHand`, and the
+ * library's prompts to `announce` (the page's live region — nothing here
+ * speaks). The controls live in the host's sidebar through `actionsRef`
+ * ({ register, toggleFixed, retry }) and `onStatus`; this component renders
+ * only the hidden video and the camera debug overlay for a sighted helper.
+ * Keys: R register, ; fix (dead while focus is inside the Audiom iframe).
  */
 export function CamioPointerPanel({
-  onUv, avatarPin = null, fingerPin = null, pagesLabel = '', showRectPanel = true,
-  actionsRef, onRegistrationChange, leadingControls = null, announce = NO_ANNOUNCE,
+  onPoint = NOOP, onLeave = NOOP, onOpenHand = NOOP, onStatus, actionsRef, announce = NOOP,
 }) {
-  const announceRef = useRef(announce);
-  useEffect(() => { announceRef.current = announce; }, [announce]);
+  const cb = useRef({});
+  cb.current = { onPoint, onLeave, onOpenHand, announce };
   const videoRef = useRef(null);
   const debugRef = useRef(null);
-  const rectRef = useRef(null);
   const pointerRef = useRef(null);
-  const lastUvRef = useRef(null);
 
-  const onUvRef = useRef(onUv);
-  useEffect(() => { onUvRef.current = onUv; }, [onUv]);
-  const avatarPinRef = useRef(avatarPin);
-  useEffect(() => { avatarPinRef.current = avatarPin; }, [avatarPin]);
-  const fingerPinRef = useRef(fingerPin);
-  useEffect(() => { fingerPinRef.current = fingerPin; }, [fingerPin]);
-  const pagesLabelRef = useRef(pagesLabel);
-  useEffect(() => { pagesLabelRef.current = pagesLabel; }, [pagesLabel]);
-
-  const [initStatus, setInitStatus] = useState('Initializing…'); // until the library runs, or an error
+  const [initStatus, setInitStatus] = useState('Starting camera'); // until the library runs, or an error
+  const [cameraError, setCameraError] = useState(false);
   const [attempt, setAttempt] = useState(0); // bump to retry camera/model init
   const [camInfo, setCamInfo] = useState(null);
   const [pst, setPst] = useState(null); // the library's PointerStatus
-  const [trackInfo, setTrackInfo] = useState(null); // { found, visible }
+  const [cell, setCell] = useState(null); // last 'point' [col, row], for the overlay
 
-  const phase = PHASE_NAMES[pst?.phase] || 'idle';
+  const phase = pst?.phase || 'idle';
   const isFixed = !!pst?.fixed;
-  useEffect(() => { onRegistrationChange?.({ phase, isFixed }); }, [phase, isFixed, onRegistrationChange]);
+  const status = initStatus ?? (pst ? statusText(pst) : 'Starting camera');
+  useEffect(() => {
+    onStatus?.({ phase, isFixed, text: status, cameraError });
+  }, [phase, isFixed, status, cameraError, onStatus]);
 
-  const startCapture = () => pointerRef.current?.registerByCorners();
-  const startAutoFind = () => {
-    pointerRef.current?.autoRegister().catch((e) => console.warn('[CamioPointerPanel] auto-find failed:', e));
-  };
+  const register = () => pointerRef.current?.registerByCorners();
   const toggleFixed = () => {
     const p = pointerRef.current;
-    if (p) p.setFixed(!p.status.fixed);
+    if (p?.status.registered) p.setFixed(!p.status.fixed);
   };
+  const retry = () => { setCameraError(false); setInitStatus('Retrying camera'); setAttempt((a) => a + 1); };
 
-  if (actionsRef) actionsRef.current = { register: startCapture, autoFind: startAutoFind, toggleFixed };
+  if (actionsRef) actionsRef.current = { register, toggleFixed, retry };
 
-  // Keyboard: ';' Fix, 'r' register by corners, 'a' auto-find (ignored while
-  // typing in a field). Dead while focus is inside the Audiom iframe (R9).
+  // Keyboard: 'r' register by corners, ';' fix (ignored while typing in a field).
   useEffect(() => {
     function onKey(e) {
       if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === ';' || e.code === 'Semicolon') { e.preventDefault(); toggleFixed(); }
-      if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startCapture(); }
-      if (e.key === 'a' || e.key === 'A') { e.preventDefault(); startAutoFind(); }
+      if (e.key === 'r' || e.key === 'R') { e.preventDefault(); register(); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  /** Emit the fingertip (u, v), or null once. The bridge ignores repeats of null cheaply. */
-  const emitUv = (uv) => {
-    if (!uv && lastUvRef.current === null) return;
-    lastUvRef.current = uv;
-    onUvRef.current?.(uv);
-  };
-
-  // Camera + library. The camera is opened here (cameraDevices.js, as before,
-  // with the relaxed retry) into a rendered <video>, and handed to the library.
+  // Camera + library. The camera is opened here (cameraDevices.js, with the
+  // relaxed retry) into a rendered <video> and handed to the library.
   useEffect(() => {
     let cancelled = false;
     const video = videoRef.current;
     const pointer = createCamioPointer({
-      surface: { kind: 'dotpad', border: BAND },
+      surface: { kind: 'rect' },
       wasmBase: MEDIAPIPE_WASM,
       modelUrl: HAND_MODEL_URL,
       opencvUrl: OPENCV_URL,
       video,
-      hysteresis: 0,
+      minIntervalMs: MIN_INTERVAL_MS,
     });
     pointerRef.current = pointer;
     const reported = new Set();
-    pointer.on('prompt', ({ text }) => announceRef.current?.(text));
-    pointer.on('openHand', () => cancelSpeech());
+    pointer.on('prompt', ({ text }) => cb.current.announce(text));
+    pointer.on('point', (p) => { setCell([p.col, p.row]); cb.current.onPoint(p); });
+    pointer.on('leave', (e) => { setCell(null); cb.current.onLeave(e); });
+    pointer.on('openHand', (e) => cb.current.onOpenHand(e));
     pointer.on('cue', ({ code }) => { if (code === 'lock') beep(); });
     pointer.on('status', (st) => setPst(st));
     pointer.on('error', (e) => {
@@ -172,19 +135,16 @@ export function CamioPointerPanel({
     });
 
     async function init() {
-      setInitStatus(attempt === 0 ? 'Opening camera…' : 'Opening camera (any device)…');
+      setInitStatus(attempt === 0 ? 'Opening camera' : 'Opening camera (any device)');
       const stream = await openCameraStream({ relaxed: attempt > 0 });
       if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
       video.srcObject = stream;
       await video.play();
-      setInitStatus('Loading hand model…');
+      setInitStatus('Loading hand model');
       await pointer.start(); // waits for real frames; throws when none arrive
       if (cancelled) return;
       const track = stream.getVideoTracks()[0];
-      setCamInfo({
-        w: video.videoWidth, h: video.videoHeight,
-        label: track?.label || 'camera', state: track?.readyState || '?',
-      });
+      setCamInfo({ w: video.videoWidth, h: video.videoHeight, state: track?.readyState || '?' });
       setPst(pointer.status);
       setInitStatus(null);
     }
@@ -192,9 +152,10 @@ export function CamioPointerPanel({
     init().catch((e) => {
       if (cancelled) return;
       console.error('[CamioPointerPanel] init failed:', e);
-      if (e?.name === 'NotAllowedError') announceRef.current?.(PROMPTS['camera.denied'], { assertive: true });
+      setCameraError(true);
+      if (e?.name === 'NotAllowedError') cb.current.announce(PROMPTS['camera.denied'], { assertive: true });
       setInitStatus(/no frames/i.test(e?.message || '')
-        ? 'Camera opened but sent no frames — close other apps using it (e.g. the Camera app), then Retry.'
+        ? 'Camera sent no frames. Close other apps using it, then retry.'
         : `Camera error: ${e?.name === 'NotAllowedError' ? 'permission denied' : e?.message}`);
     });
 
@@ -205,48 +166,22 @@ export function CamioPointerPanel({
       video?.srcObject?.getTracks?.().forEach((t) => t.stop());
       if (video) video.srcObject = null;
       setPst(null);
-      lastUvRef.current = null;
-      onUvRef.current?.(null);
+      setCell(null);
     };
   }, [attempt]);
 
-  // Per animation frame: the fingertip → onUv, the library's debug overlay,
-  // and the pin view.
+  // The library's debug overlay, every animation frame.
   useEffect(() => {
-    let raf = 0, n = 0, lastRectKey = '';
+    let raf = 0;
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const p = pointerRef.current;
-      let uv = null;
-      if (p?.running) {
-        const core = p.core;
-        if (core.currentPoint) uv = uvFromPose(p.pose, core.view.tip, core.currentGrid);
-        if (debugRef.current) p.drawDebug(debugRef.current);
-        if (++n % 15 === 0) {
-          const step = core.lastTrackStep;
-          setTrackInfo((prev) => (step && (prev?.found !== step.found || prev?.visible !== step.visible)
-            ? { found: step.found, visible: step.visible } : prev));
-        }
-      }
-      emitUv(uv);
-
-      const registered = !!p?.registration;
-      const key = `${registered}|${avatarPinRef.current}|${fingerPinRef.current}|${pagesLabelRef.current}|${uv ? `${uv.u.toFixed(3)},${uv.v.toFixed(3)}` : ''}`;
-      if (key !== lastRectKey) {
-        lastRectKey = key;
-        drawPinView(rectRef.current, {
-          registered, uv, avatarPin: avatarPinRef.current, fingerPin: fingerPinRef.current, pagesLabel: pagesLabelRef.current,
-        });
-      }
+      if (p?.running && debugRef.current) p.drawDebug(debugRef.current);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const status = initStatus ?? (pst ? statusText(pst) : 'Initializing…');
-  const progress = pst?.phase === 'corners'
-    ? ` (${pst.cornersLocked}/4 — ${CORNER_PROMPTS[Math.min(pst.cornersLocked, 3)]} pin)`
-    : '';
   const gestureHint = pst && pst.gesture !== 'none' && pst.gesture !== 'pointing'
     ? ({ exploring: 'hand, not pointing', open: 'open hand', tooMany: 'two hands on one side' })[pst.gesture]
     : null;
@@ -268,114 +203,18 @@ export function CamioPointerPanel({
         }}
       />
 
-      <div className="tactile-controls-panel">
-        {leadingControls}
-        {/Camera error|no frames/.test(status) && (
-          <button
-            type="button"
-            className="tactile-fix-btn"
-            onClick={() => { setInitStatus('Retrying…'); setAttempt((a) => a + 1); }}
-          >
-            ⟳ Retry camera
-          </button>
-        )}
-        <button type="button" className="tactile-fix-btn" onClick={startCapture}>
-          {phase === 'ready' ? '↻ Re-register corners [ r ]' : '🎯 Register corners [ r ]'}
-        </button>
-        <button type="button" className="tactile-fix-btn" onClick={startAutoFind}>
-          🔎 Auto-find pad [ a ]
-        </button>
-        <button
-          type="button"
-          className={`tactile-fix-btn ${isFixed ? 'fixed' : ''}`}
-          onClick={toggleFixed}
-          disabled={phase !== 'ready'}
-          title={phase === 'ready'
-            ? 'Freeze the current pose (press ; )'
-            : 'Register the DOT Pad first — then Fix freezes the pose'}
-        >
-          {isFixed ? '🔓 Unfix [ ; ]' : '🔒 Fix [ ; ]'}
-        </button>
-      </div>
-
-      <div className="tactile-debug-panel">
+      {/* For a sighted helper: the camera frame, the registered sheet and the fingertip. */}
+      <div className="tactile-debug-panel" aria-hidden="true">
         <div className="tactile-debug-header">
           <span>
-            camio-pointer · {status}{progress}
-            {camInfo ? ` · ${camInfo.w}×${camInfo.h} ${camInfo.state}` : ' · no camera yet'}
-            {pst?.phase === 'ready' ? <>&nbsp;·&nbsp;tracking: {pst.tracking}</> : null}
-            {trackInfo ? <>&nbsp;·&nbsp;pins: {trackInfo.found}/{trackInfo.visible}</> : null}
+            camera · {status}
+            {camInfo ? ` · ${camInfo.w}×${camInfo.h} ${camInfo.state}` : ''}
+            {cell ? ` · cell ${cell[0]},${cell[1]}` : ''}
             {gestureHint ? <>&nbsp;·&nbsp;<strong>{gestureHint}</strong></> : null}
           </span>
-          <button
-            type="button"
-            className={`tactile-debug-fix-btn ${isFixed ? 'fixed' : ''}`}
-            onClick={toggleFixed}
-            title="Freeze the current pose (press ; )"
-          >
-            {isFixed ? 'Unfix' : 'Fix'}
-          </button>
         </div>
-        {/* The library's drawDebug overlay: camera frame, pin field, tracker pins, fingertip. */}
         <canvas ref={debugRef} width={320} className="tactile-debug-canvas" />
       </div>
-
-      {/* The pin grid (no camera warp — that needed OpenCV): the mirrored
-          avatar (blue) and the finger (yellow). */}
-      {showRectPanel && (
-        <div className="tactile-rect-panel">
-          <div className="tactile-debug-header">
-            <span>
-              pin view · pin grid 60×40
-              {fingerPin ? ` · finger ${fingerPin[0]},${fingerPin[1]}` : ''}
-              {avatarPin ? ` · avatar ${avatarPin[0]},${avatarPin[1]}` : ''}
-              {pagesLabel ? ` · ${pagesLabel}` : ''}
-            </span>
-          </div>
-          <canvas ref={rectRef} className="tactile-debug-canvas" />
-        </div>
-      )}
-
-      {!status.startsWith('Tracking') && (
-        <div className="tactile-status-hud">{status}{progress}</div>
-      )}
     </>
   );
-}
-
-/** The 60 × 40 pins (2-pin band orange), avatar pin blue, finger pin yellow, raw fingertip ring. */
-function drawPinView(canvas, { registered, uv, avatarPin, fingerPin, pagesLabel }) {
-  if (!canvas) return;
-  const S = 8, M = 12;
-  const W = PIN_COLS * S + 2 * M, H = PIN_ROWS * S + 2 * M + 14;
-  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
-  const ctx = canvas.getContext('2d');
-  const pinXY = (i, j) => [M + (i + 0.5) * S, M + 14 + (j + 0.5) * S];
-  ctx.fillStyle = '#0f172a'; ctx.fillRect(0, 0, W, H);
-  for (let i = 0; i < PIN_COLS; i++) {
-    for (let j = 0; j < PIN_ROWS; j++) {
-      const inBand = i < BAND || j < BAND || i > PIN_COLS - 1 - BAND || j > PIN_ROWS - 1 - BAND;
-      const [x, y] = pinXY(i, j);
-      ctx.fillStyle = inBand ? 'rgba(249,115,22,0.9)' : 'rgba(239,68,68,0.9)';
-      ctx.fillRect(x - 1, y - 1, 2, 2);
-    }
-  }
-  const pinBox = (p, fill, stroke) => {
-    const [x, y] = pinXY(p[0], p[1]);
-    ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 1.5;
-    ctx.fillRect(x - S / 2, y - S / 2, S, S);
-    ctx.strokeRect(x - S / 2, y - S / 2, S, S);
-  };
-  if (avatarPin && avatarPin[0] >= 0 && avatarPin[0] < PIN_COLS && avatarPin[1] >= 0 && avatarPin[1] < PIN_ROWS) {
-    pinBox(avatarPin, 'rgba(59,130,246,0.6)', '#bfdbfe');
-  }
-  if (fingerPin) pinBox(fingerPin, 'rgba(250,204,21,0.6)', '#000');
-  if (uv) {
-    const [x, y] = pinXY(uv.u * (PIN_COLS - 1), uv.v * (PIN_ROWS - 1));
-    ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(250,204,21,0.95)'; ctx.lineWidth = 1.5; ctx.stroke();
-  }
-  ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-  const label = registered ? `DOT Pad 60×40 ${pagesLabel || ''}` : 'press R (corners) or A (auto-find)';
-  ctx.fillStyle = '#e2e8f0'; ctx.fillText(label, M, 16);
 }

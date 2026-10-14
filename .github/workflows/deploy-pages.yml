@@ -13,8 +13,8 @@
 #
 # NOTE: Vite inlines every import.meta.env.VITE_* value into the shipped
 # JavaScript. Repository secrets keep them out of the repo, NOT out of the
-# bundle. Restrict the Mapbox token to your Pages origin, and use a
-# domain-restricted Audiom key. See starter/docs/deploy-github-pages.md.
+# bundle. Use a domain-restricted Audiom key. (audiom.html no longer uses
+# a Mapbox token, so none is passed.) See starter/docs/deploy-github-pages.md.
 
 name: Deploy to GitHub Pages
 
@@ -70,12 +70,6 @@ jobs:
         env:
           # Project Pages serve from /<repo>/ — configure-pages resolves it.
           VITE_BASE: ${{ steps.pages.outputs.base_path }}
-          # Only used for free-text address search on audiom.html (map ids, URLs
-          # and predefined sources work without it).
-          # Public by design; restrict it by URL in the Mapbox dashboard.
-          # The account's DEFAULT public token cannot take URL restrictions —
-          # generate a new one.
-          VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           # Ends up in the Audiom iframe query string, so it is visible in the
           # DOM no matter what. Use a domain-restricted embed key.
           VITE_AUDIOM_KEY: ${{ secrets.VITE_AUDIOM_KEY }}
@@ -92,7 +86,7 @@ jobs:
 
       # Pages serves the bare site URL only from index.html, which the
       # audiom-only build does not produce. Redirect it to the Audiom page,
-      # keeping any ?query/#hash (e.g. ?map=885). Relative URL, so it works
+      # keeping any ?query/#hash (e.g. ?bbox=…). Relative URL, so it works
       # under the /<repo>/ base path.
       - name: Redirect site root to audiom.html
         run: |

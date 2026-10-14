@@ -50,9 +50,8 @@ function metersBetween(a, b) {
  *                and `route_to` mode `fly_me_there` through. Pass a stable
  *                callback: it is re-invoked whenever its identity changes.
  *  - autoDrive : default true — the throttled `coordRef` interval drives the
- *                avatar from the fingertip. DOT Pad mode passes false: there the
- *                bridge (`hooks/useDotpadBridge.js`) owns every `moveAvatar`, so
- *                sends stay on pin centres, rate-limited and echo-tracked.
+ *                avatar from the fingertip. audiom.html passes false: its camera
+ *                pointer sends every `moveAvatar` itself through `onChannel`.
  *  - onUtterance / speechPhrases / speechLang / allowCloudStt :
  *                milestone S. `onUtterance` receives any transcript L0 does not
  *                answer itself — the M7 dispatcher's entry point. `speechPhrases`
@@ -388,21 +387,8 @@ export function AudiomMap({
     >
       <div className="audiom-panel-header">
         <span>Audiom · {status}{lastFeature ? ` · ${lastFeature}` : ''}</span>
-        {/* The system's first spoken output. Answered at L0 from the last
-            featureEntered payload — no model, no network, no inference. */}
-        <button
-          type="button"
-          onClick={whatsHere}
-          title="Speak the feature under the avatar"
-          style={{
-            marginLeft: 8, padding: '1px 6px', border: 0, borderRadius: 4,
-            background: '#334155', color: '#e2e8f0', fontSize: 11, cursor: 'pointer',
-          }}
-        >
-          What&rsquo;s here?
-        </button>
-        {/* Milestone S. Same gesture rules as the button above: pressing it arms
-            the narration queue AND opens the microphone. Anything L0 cannot
+        {/* Milestone S. Pressing it arms the narration queue AND opens the
+            microphone; "what's here" is answered by `whatsHere`. Anything L0 cannot
             answer goes out through `onUtterance`. Off unless `showMic`. */}
         {showMic && (
           <AudiomMic
