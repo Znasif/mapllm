@@ -1,0 +1,1981 @@
+diff --git a/documentation/embedding.md b/documentation/embedding.md
+index 33a6a2d9..843c9afc 100644
+--- a/documentation/embedding.md
++++ b/documentation/embedding.md
+@@ -593,3 +593,9 @@ For fullscreen to work inside an iframe, include `allowfullscreen` or
+ 
+ Without iframe fullscreen permission, users hear "Fullscreen is not available"
+ when they try to enter fullscreen mode.
++
++The camera pointer (point at a DOT Pad or a printed map) needs the camera
++inside the iframe, so the generated snippet also carries
++`allow="camera; fullscreen"`. Without `camera` the browser refuses the camera
++and Audiom says so; everything else keeps working. Video is processed on the
++device and never leaves the browser.
+diff --git a/public/locales/de/translation.json b/public/locales/de/translation.json
+index b8a45226..6a6242b4 100644
+--- a/public/locales/de/translation.json
++++ b/public/locales/de/translation.json
+@@ -1612,6 +1612,12 @@
+ 				"error": "DOT-Pad-Fehler: {{message}}",
+ 				"genOneUpdate": "Heben Sie Ihre Hände an, während das DOT Pad aktualisiert wird."
+ 			},
++			"cameraPointer": {
++				"title": "Kamerazeiger",
++				"toggle": "Mit der Kamera zeigen",
++				"useDotPad": "Auf dem DOT Pad zeigen",
++				"register": "Über die Ecken registrieren"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Ausrichtung",
+@@ -3650,5 +3656,62 @@
+ 		"not-loaded": "Der Bereich um Sie herum wurde für {{name}} noch nicht durchsucht.",
+ 		"loadedOnly": "Suche und Export umfassen nur die derzeit geladenen Daten.",
+ 		"trackingUnloaded": "Folgen von {{name}} gestoppt, da es außerhalb des geladenen Bereichs liegt."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Hände weg vom DOT Pad.",
++				"searching": "DOT Pad wird gesucht.",
++				"corner": {
++					"topLeft": "Zeigen Sie auf die Ecke oben links und halten Sie.",
++					"topRight": "Ecke oben rechts.",
++					"bottomRight": "Ecke unten rechts.",
++					"bottomLeft": "Ecke unten links."
++				},
++				"cornersRejected": "Ecken nicht verwendbar. Bitte noch einmal.",
++				"liftHand": "Verstanden. Heben Sie die Hand.",
++				"confirmTopLeft": "Gefunden. Berühren Sie den Pin oben links.",
++				"confirmMissed": "Keine Ecke. Nutzen Sie die Ecken.",
++				"notFound": "DOT Pad nicht gefunden. Über die Ecken registrieren.",
++				"done": "Registriert.",
++				"cancelled": "Abgebrochen."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Linke Hand",
++					"right": "Rechte Hand"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad verloren. Kurz Hände weg.",
++				"restored": "Wiedergefunden.",
++				"moved": "DOT Pad verschoben. Neu registriert.",
++				"pinsNotVisible": "Pins nicht sichtbar. DOT Pad ruhig lassen.",
++				"surface": {
++					"static": "Zu schlicht zum Verfolgen. Nicht bewegen."
++				}
++			},
++			"camera": {
++				"noFrames": "Kein Kamerabild. Schließen Sie andere Apps, die die Kamera nutzen.",
++				"denied": "Kamera blockiert. Erlauben Sie sie für diese Seite."
++			}
++		},
++		"status": {
++			"off": "Aus",
++			"starting": "Startet",
++			"idle": "Nicht registriert",
++			"corners": "Registrierung",
++			"autoFind": "DOT Pad wird gesucht",
++			"confirm": "Pin oben links berühren",
++			"handsOff": "Hand heben",
++			"none": "Kamera an",
++			"loading": "Lädt",
++			"tracking": "Verfolgt",
++			"occluded": "Verfolgt, teilweise verdeckt",
++			"static": "Bewegung wird nicht verfolgt",
++			"lost": "Verloren",
++			"fixed": "Fixiert"
++		},
++		"noExtent": "Keine Kartenränder. Nutzen Sie ein DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/en/translation.json b/public/locales/en/translation.json
+index 80f54573..4cc925a2 100644
+--- a/public/locales/en/translation.json
++++ b/public/locales/en/translation.json
+@@ -1612,6 +1612,12 @@
+ 				"error": "DOT Pad error: {{message}}",
+ 				"genOneUpdate": "Lift your hands while the DOT Pad updates."
+ 			},
++			"cameraPointer": {
++				"title": "Camera pointer",
++				"toggle": "Point with the camera",
++				"useDotPad": "Point on the DOT Pad",
++				"register": "Register by corners"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Heading",
+@@ -3547,5 +3553,62 @@
+ 		"not-loaded": "The area around you has not been searched for {{name}}.",
+ 		"loadedOnly": "Search and export include only the data currently loaded.",
+ 		"trackingUnloaded": "Stopped tracking {{name}} because it is outside the loaded area."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Hands off the DOT Pad.",
++				"searching": "Finding the DOT Pad.",
++				"corner": {
++					"topLeft": "Point at the top-left corner and hold.",
++					"topRight": "Top-right corner.",
++					"bottomRight": "Bottom-right corner.",
++					"bottomLeft": "Bottom-left corner."
++				},
++				"cornersRejected": "Corners not usable. Try again.",
++				"liftHand": "Got it. Lift your hand.",
++				"confirmTopLeft": "Found it. Touch the top-left pin.",
++				"confirmMissed": "Not a corner. Use the corners instead.",
++				"notFound": "DOT Pad not found. Register by corners.",
++				"done": "Registered.",
++				"cancelled": "Cancelled."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Left hand",
++					"right": "Right hand"
++				}
++			},
++			"tracking": {
++				"lost": "Lost the DOT Pad. Hands off for a moment.",
++				"restored": "Found it again.",
++				"moved": "DOT Pad moved. Re-registered.",
++				"pinsNotVisible": "Can't see the pins. Keep the DOT Pad still.",
++				"surface": {
++					"static": "Too plain to follow. Keep it still."
++				}
++			},
++			"camera": {
++				"noFrames": "No camera picture. Close other apps using the camera.",
++				"denied": "Camera blocked. Allow it for this page."
++			}
++		},
++		"status": {
++			"off": "Off",
++			"starting": "Starting",
++			"idle": "Not registered",
++			"corners": "Registering",
++			"autoFind": "Finding the DOT Pad",
++			"confirm": "Touch the top-left pin",
++			"handsOff": "Lift your hand",
++			"none": "Camera on",
++			"loading": "Loading",
++			"tracking": "Tracking",
++			"occluded": "Tracking, partly covered",
++			"static": "Not following movement",
++			"lost": "Lost",
++			"fixed": "Fixed"
++		},
++		"noExtent": "No map edges. Use a DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/es/translation.json b/public/locales/es/translation.json
+index d3fd74f9..0aa001ec 100644
+--- a/public/locales/es/translation.json
++++ b/public/locales/es/translation.json
+@@ -1629,6 +1629,12 @@
+ 				"error": "Error de DOT Pad: {{message}}",
+ 				"genOneUpdate": "Levante las manos mientras se actualiza el DOT Pad."
+ 			},
++			"cameraPointer": {
++				"title": "Puntero por cámara",
++				"toggle": "Señalar con la cámara",
++				"useDotPad": "Señalar en el DOT Pad",
++				"register": "Registrar por las esquinas"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Dirección",
+@@ -3690,5 +3696,62 @@
+ 		"not-loaded": "Todavía no se ha buscado en la zona que te rodea para {{name}}.",
+ 		"loadedOnly": "La búsqueda y la exportación solo incluyen los datos cargados actualmente.",
+ 		"trackingUnloaded": "Se detuvo el seguimiento de {{name}} porque está fuera del área cargada."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Retire las manos del DOT Pad.",
++				"searching": "Buscando el DOT Pad.",
++				"corner": {
++					"topLeft": "Señale la esquina superior izquierda y mantenga.",
++					"topRight": "Esquina superior derecha.",
++					"bottomRight": "Esquina inferior derecha.",
++					"bottomLeft": "Esquina inferior izquierda."
++				},
++				"cornersRejected": "Esquinas no válidas. Inténtelo de nuevo.",
++				"liftHand": "Listo. Levante la mano.",
++				"confirmTopLeft": "Encontrado. Toque el pin superior izquierdo.",
++				"confirmMissed": "No es una esquina. Use las esquinas.",
++				"notFound": "DOT Pad no encontrado. Regístrelo por las esquinas.",
++				"done": "Registrado.",
++				"cancelled": "Cancelado."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Mano izquierda",
++					"right": "Mano derecha"
++				}
++			},
++			"tracking": {
++				"lost": "Se perdió el DOT Pad. Retire las manos un momento.",
++				"restored": "Encontrado de nuevo.",
++				"moved": "DOT Pad movido. Registrado de nuevo.",
++				"pinsNotVisible": "No se ven los pines. No mueva el DOT Pad.",
++				"surface": {
++					"static": "Demasiado liso para seguirlo. No lo mueva."
++				}
++			},
++			"camera": {
++				"noFrames": "Sin imagen de cámara. Cierre otras apps que usen la cámara.",
++				"denied": "Cámara bloqueada. Permítala en esta página."
++			}
++		},
++		"status": {
++			"off": "Desactivado",
++			"starting": "Iniciando",
++			"idle": "Sin registrar",
++			"corners": "Registrando",
++			"autoFind": "Buscando el DOT Pad",
++			"confirm": "Toque el pin superior izquierdo",
++			"handsOff": "Levante la mano",
++			"none": "Cámara activada",
++			"loading": "Cargando",
++			"tracking": "Siguiendo",
++			"occluded": "Siguiendo, parcialmente cubierto",
++			"static": "Sin seguir el movimiento",
++			"lost": "Perdido",
++			"fixed": "Fijo"
++		},
++		"noExtent": "El mapa no tiene bordes. Use un DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/fr/translation.json b/public/locales/fr/translation.json
+index ee6dd29a..1f815341 100644
+--- a/public/locales/fr/translation.json
++++ b/public/locales/fr/translation.json
+@@ -1629,6 +1629,12 @@
+ 				"error": "Erreur DOT Pad : {{message}}",
+ 				"genOneUpdate": "Levez les mains pendant l’actualisation du DOT Pad."
+ 			},
++			"cameraPointer": {
++				"title": "Pointeur par caméra",
++				"toggle": "Pointer avec la caméra",
++				"useDotPad": "Pointer sur le DOT Pad",
++				"register": "Repérer par les coins"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Direction",
+@@ -3690,5 +3696,62 @@
+ 		"not-loaded": "La zone autour de vous n’a pas encore été explorée pour {{name}}.",
+ 		"loadedOnly": "La recherche et l’exportation incluent uniquement les données actuellement chargées.",
+ 		"trackingUnloaded": "Arrêt du suivi de {{name}}, car il se trouve hors de la zone chargée."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Retirez les mains du DOT Pad.",
++				"searching": "Recherche du DOT Pad.",
++				"corner": {
++					"topLeft": "Pointez le coin supérieur gauche et maintenez.",
++					"topRight": "Coin supérieur droit.",
++					"bottomRight": "Coin inférieur droit.",
++					"bottomLeft": "Coin inférieur gauche."
++				},
++				"cornersRejected": "Coins inutilisables. Réessayez.",
++				"liftHand": "Compris. Levez la main.",
++				"confirmTopLeft": "Trouvé. Touchez le picot supérieur gauche.",
++				"confirmMissed": "Pas un coin. Utilisez plutôt les coins.",
++				"notFound": "DOT Pad introuvable. Repérez-le par ses coins.",
++				"done": "Repéré.",
++				"cancelled": "Annulé."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Main gauche",
++					"right": "Main droite"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad perdu. Retirez les mains un instant.",
++				"restored": "Retrouvé.",
++				"moved": "DOT Pad déplacé. Repéré à nouveau.",
++				"pinsNotVisible": "Picots invisibles. Ne bougez pas le DOT Pad.",
++				"surface": {
++					"static": "Trop uni pour être suivi. Ne le bougez pas."
++				}
++			},
++			"camera": {
++				"noFrames": "Pas d’image de la caméra. Fermez les autres applis qui l’utilisent.",
++				"denied": "Caméra bloquée. Autorisez-la pour cette page."
++			}
++		},
++		"status": {
++			"off": "Désactivé",
++			"starting": "Démarrage",
++			"idle": "Non repéré",
++			"corners": "Repérage",
++			"autoFind": "Recherche du DOT Pad",
++			"confirm": "Touchez le picot supérieur gauche",
++			"handsOff": "Levez la main",
++			"none": "Caméra activée",
++			"loading": "Chargement",
++			"tracking": "Suivi",
++			"occluded": "Suivi, partiellement couvert",
++			"static": "Mouvement non suivi",
++			"lost": "Perdu",
++			"fixed": "Figé"
++		},
++		"noExtent": "Carte sans bords. Utilisez un DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/hi/translation.json b/public/locales/hi/translation.json
+index 2a2391a1..147b7c42 100644
+--- a/public/locales/hi/translation.json
++++ b/public/locales/hi/translation.json
+@@ -1612,6 +1612,12 @@
+ 				"error": "DOT Pad त्रुटि: {{message}}",
+ 				"genOneUpdate": "DOT Pad अपडेट होते समय अपने हाथ उठा लें।"
+ 			},
++			"cameraPointer": {
++				"title": "कैमरा पॉइंटर",
++				"toggle": "कैमरे से इशारा करें",
++				"useDotPad": "DOT Pad पर इशारा करें",
++				"register": "कोनों से पंजीकृत करें"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "अवतार",
+ 				"heading": "दिशा",
+@@ -3650,5 +3656,62 @@
+ 		"not-loaded": "{{name}} के लिए आपके आस-पास के क्षेत्र में अभी खोज नहीं की गई है।",
+ 		"loadedOnly": "खोज और निर्यात में केवल अभी लोड किया गया डेटा शामिल है।",
+ 		"trackingUnloaded": "{{name}} का ट्रैकिंग बंद कर दिया गया क्योंकि वह लोड किए गए क्षेत्र से बाहर है।"
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "DOT Pad से हाथ हटाएँ।",
++				"searching": "DOT Pad खोजा जा रहा है।",
++				"corner": {
++					"topLeft": "ऊपरी बाएँ कोने की ओर इशारा करें और रुकें।",
++					"topRight": "ऊपरी दायाँ कोना।",
++					"bottomRight": "निचला दायाँ कोना।",
++					"bottomLeft": "निचला बायाँ कोना।"
++				},
++				"cornersRejected": "कोने उपयोग योग्य नहीं। फिर से करें।",
++				"liftHand": "ठीक है। हाथ उठाएँ।",
++				"confirmTopLeft": "मिल गया। ऊपरी बाईं पिन छुएँ।",
++				"confirmMissed": "यह कोना नहीं है। कोनों का उपयोग करें।",
++				"notFound": "DOT Pad नहीं मिला। कोनों से पंजीकृत करें।",
++				"done": "पंजीकृत।",
++				"cancelled": "रद्द।"
++			},
++			"pointing": {
++				"hand": {
++					"left": "बायाँ हाथ",
++					"right": "दायाँ हाथ"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad खो गया। एक पल हाथ हटाएँ।",
++				"restored": "फिर मिल गया।",
++				"moved": "DOT Pad हिला। फिर से पंजीकृत।",
++				"pinsNotVisible": "पिनें नहीं दिख रहीं। DOT Pad स्थिर रखें।",
++				"surface": {
++					"static": "अनुसरण के लिए बहुत सादा। इसे स्थिर रखें।"
++				}
++			},
++			"camera": {
++				"noFrames": "कैमरे की तस्वीर नहीं। कैमरा उपयोग कर रहे अन्य ऐप बंद करें।",
++				"denied": "कैमरा अवरुद्ध। इस पेज के लिए अनुमति दें।"
++			}
++		},
++		"status": {
++			"off": "बंद",
++			"starting": "शुरू हो रहा है",
++			"idle": "पंजीकृत नहीं",
++			"corners": "पंजीकरण हो रहा है",
++			"autoFind": "DOT Pad खोजा जा रहा है",
++			"confirm": "ऊपरी बाईं पिन छुएँ",
++			"handsOff": "हाथ उठाएँ",
++			"none": "कैमरा चालू",
++			"loading": "लोड हो रहा है",
++			"tracking": "अनुसरण हो रहा है",
++			"occluded": "अनुसरण हो रहा है, आंशिक रूप से ढका",
++			"static": "हलचल का अनुसरण नहीं",
++			"lost": "खो गया",
++			"fixed": "स्थिर"
++		},
++		"noExtent": "मानचित्र के किनारे नहीं हैं। DOT Pad का उपयोग करें।"
+ 	}
+ }
+diff --git a/public/locales/it/translation.json b/public/locales/it/translation.json
+index 490bd1de..86f60724 100644
+--- a/public/locales/it/translation.json
++++ b/public/locales/it/translation.json
+@@ -1629,6 +1629,12 @@
+ 				"error": "Errore DOT Pad: {{message}}",
+ 				"genOneUpdate": "Solleva le mani durante l’aggiornamento del DOT Pad."
+ 			},
++			"cameraPointer": {
++				"title": "Puntatore con fotocamera",
++				"toggle": "Punta con la fotocamera",
++				"useDotPad": "Punta sul DOT Pad",
++				"register": "Registra dagli angoli"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Direzione",
+@@ -3690,5 +3696,62 @@
+ 		"not-loaded": "La zona intorno a te non è ancora stata esplorata per {{name}}.",
+ 		"loadedOnly": "La ricerca e l’esportazione includono solo i dati attualmente caricati.",
+ 		"trackingUnloaded": "Tracciamento di {{name}} interrotto perché si trova fuori dall’area caricata."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Togli le mani dal DOT Pad.",
++				"searching": "Ricerca del DOT Pad.",
++				"corner": {
++					"topLeft": "Punta l’angolo in alto a sinistra e tieni fermo.",
++					"topRight": "Angolo in alto a destra.",
++					"bottomRight": "Angolo in basso a destra.",
++					"bottomLeft": "Angolo in basso a sinistra."
++				},
++				"cornersRejected": "Angoli non validi. Riprova.",
++				"liftHand": "Fatto. Solleva la mano.",
++				"confirmTopLeft": "Trovato. Tocca il pin in alto a sinistra.",
++				"confirmMissed": "Non è un angolo. Usa gli angoli.",
++				"notFound": "DOT Pad non trovato. Registralo dagli angoli.",
++				"done": "Registrato.",
++				"cancelled": "Annullato."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Mano sinistra",
++					"right": "Mano destra"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad perso. Togli le mani per un momento.",
++				"restored": "Ritrovato.",
++				"moved": "DOT Pad spostato. Registrato di nuovo.",
++				"pinsNotVisible": "Pin non visibili. Tieni fermo il DOT Pad.",
++				"surface": {
++					"static": "Troppo uniforme da seguire. Tienilo fermo."
++				}
++			},
++			"camera": {
++				"noFrames": "Nessuna immagine. Chiudi le altre app che usano la fotocamera.",
++				"denied": "Fotocamera bloccata. Consentila per questa pagina."
++			}
++		},
++		"status": {
++			"off": "Disattivato",
++			"starting": "Avvio",
++			"idle": "Non registrato",
++			"corners": "Registrazione",
++			"autoFind": "Ricerca del DOT Pad",
++			"confirm": "Tocca il pin in alto a sinistra",
++			"handsOff": "Solleva la mano",
++			"none": "Fotocamera attiva",
++			"loading": "Caricamento",
++			"tracking": "Tracciamento",
++			"occluded": "Tracciamento, parzialmente coperto",
++			"static": "Movimento non seguito",
++			"lost": "Perso",
++			"fixed": "Bloccato"
++		},
++		"noExtent": "La mappa non ha bordi. Usa un DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/ko/translation.json b/public/locales/ko/translation.json
+index 2f6a7409..17c3427d 100644
+--- a/public/locales/ko/translation.json
++++ b/public/locales/ko/translation.json
+@@ -1612,6 +1612,12 @@
+ 				"error": "DOT Pad 오류: {{message}}",
+ 				"genOneUpdate": "DOT Pad가 업데이트되는 동안 손을 들어 주세요."
+ 			},
++			"cameraPointer": {
++				"title": "카메라 포인터",
++				"toggle": "카메라로 가리키기",
++				"useDotPad": "DOT Pad에서 가리키기",
++				"register": "모서리로 등록"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "아바타",
+ 				"heading": "방향",
+@@ -3650,5 +3656,62 @@
+ 		"not-loaded": "{{name}}의 현재 주변 지역은 아직 검색되지 않았습니다.",
+ 		"loadedOnly": "검색과 내보내기에는 현재 불러온 데이터만 포함됩니다.",
+ 		"trackingUnloaded": "{{name}}이(가) 불러온 영역 밖에 있어 추적이 중지되었습니다."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "DOT Pad에서 손을 떼세요.",
++				"searching": "DOT Pad를 찾는 중.",
++				"corner": {
++					"topLeft": "왼쪽 위 모서리를 가리키고 유지하세요.",
++					"topRight": "오른쪽 위 모서리.",
++					"bottomRight": "오른쪽 아래 모서리.",
++					"bottomLeft": "왼쪽 아래 모서리."
++				},
++				"cornersRejected": "모서리를 쓸 수 없습니다. 다시 하세요.",
++				"liftHand": "확인. 손을 드세요.",
++				"confirmTopLeft": "찾았습니다. 왼쪽 위 핀을 터치하세요.",
++				"confirmMissed": "모서리가 아닙니다. 모서리로 등록하세요.",
++				"notFound": "DOT Pad를 찾지 못했습니다. 모서리로 등록하세요.",
++				"done": "등록됨.",
++				"cancelled": "취소됨."
++			},
++			"pointing": {
++				"hand": {
++					"left": "왼손",
++					"right": "오른손"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad를 놓쳤습니다. 잠시 손을 떼세요.",
++				"restored": "다시 찾았습니다.",
++				"moved": "DOT Pad가 움직였습니다. 다시 등록됨.",
++				"pinsNotVisible": "핀이 안 보입니다. DOT Pad를 움직이지 마세요.",
++				"surface": {
++					"static": "너무 밋밋해 따라갈 수 없습니다. 움직이지 마세요."
++				}
++			},
++			"camera": {
++				"noFrames": "카메라 화면이 없습니다. 카메라를 쓰는 다른 앱을 닫으세요.",
++				"denied": "카메라가 차단됨. 이 페이지에 허용하세요."
++			}
++		},
++		"status": {
++			"off": "꺼짐",
++			"starting": "시작 중",
++			"idle": "등록 안 됨",
++			"corners": "등록 중",
++			"autoFind": "DOT Pad 찾는 중",
++			"confirm": "왼쪽 위 핀 터치",
++			"handsOff": "손을 드세요",
++			"none": "카메라 켜짐",
++			"loading": "로드 중",
++			"tracking": "추적 중",
++			"occluded": "추적 중, 일부 가려짐",
++			"static": "움직임 추적 안 함",
++			"lost": "놓침",
++			"fixed": "고정됨"
++		},
++		"noExtent": "지도 경계가 없습니다. DOT Pad를 사용하세요."
+ 	}
+ }
+diff --git a/public/locales/nl/translation.json b/public/locales/nl/translation.json
+index 19bfea4e..6616a2be 100644
+--- a/public/locales/nl/translation.json
++++ b/public/locales/nl/translation.json
+@@ -1612,6 +1612,12 @@
+ 				"error": "DOT Pad-fout: {{message}}",
+ 				"genOneUpdate": "Til uw handen op terwijl de DOT Pad wordt bijgewerkt."
+ 			},
++			"cameraPointer": {
++				"title": "Camera-aanwijzer",
++				"toggle": "Aanwijzen met de camera",
++				"useDotPad": "Aanwijzen op de DOT Pad",
++				"register": "Registreren via de hoeken"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Richting",
+@@ -3650,5 +3656,62 @@
+ 		"not-loaded": "De omgeving om u heen is nog niet doorzocht voor {{name}}.",
+ 		"loadedOnly": "Zoeken en exporteren omvatten alleen de gegevens die momenteel geladen zijn.",
+ 		"trackingUnloaded": "Volgen van {{name}} gestopt omdat het buiten het geladen gebied ligt."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Handen van de DOT Pad.",
++				"searching": "DOT Pad zoeken.",
++				"corner": {
++					"topLeft": "Wijs de hoek linksboven aan en houd stil.",
++					"topRight": "Hoek rechtsboven.",
++					"bottomRight": "Hoek rechtsonder.",
++					"bottomLeft": "Hoek linksonder."
++				},
++				"cornersRejected": "Hoeken onbruikbaar. Probeer opnieuw.",
++				"liftHand": "Gelukt. Til uw hand op.",
++				"confirmTopLeft": "Gevonden. Raak de pin linksboven aan.",
++				"confirmMissed": "Geen hoek. Gebruik de hoeken.",
++				"notFound": "DOT Pad niet gevonden. Registreer via de hoeken.",
++				"done": "Geregistreerd.",
++				"cancelled": "Geannuleerd."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Linkerhand",
++					"right": "Rechterhand"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad kwijt. Haal even uw handen weg.",
++				"restored": "Weer gevonden.",
++				"moved": "DOT Pad verschoven. Opnieuw geregistreerd.",
++				"pinsNotVisible": "Pinnen niet zichtbaar. Houd de DOT Pad stil.",
++				"surface": {
++					"static": "Te egaal om te volgen. Houd het stil."
++				}
++			},
++			"camera": {
++				"noFrames": "Geen camerabeeld. Sluit andere apps die de camera gebruiken.",
++				"denied": "Camera geblokkeerd. Sta hem toe voor deze pagina."
++			}
++		},
++		"status": {
++			"off": "Uit",
++			"starting": "Starten",
++			"idle": "Niet geregistreerd",
++			"corners": "Registreren",
++			"autoFind": "DOT Pad zoeken",
++			"confirm": "Raak de pin linksboven aan",
++			"handsOff": "Til uw hand op",
++			"none": "Camera aan",
++			"loading": "Laden",
++			"tracking": "Volgen",
++			"occluded": "Volgen, deels bedekt",
++			"static": "Beweging niet gevolgd",
++			"lost": "Kwijt",
++			"fixed": "Vastgezet"
++		},
++		"noExtent": "Geen kaartranden. Gebruik een DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/pt-BR/translation.json b/public/locales/pt-BR/translation.json
+index 05d3da59..fd6e1044 100644
+--- a/public/locales/pt-BR/translation.json
++++ b/public/locales/pt-BR/translation.json
+@@ -1629,6 +1629,12 @@
+ 				"error": "Erro do DOT Pad: {{message}}",
+ 				"genOneUpdate": "Levante as mãos enquanto o DOT Pad é atualizado."
+ 			},
++			"cameraPointer": {
++				"title": "Ponteiro por câmera",
++				"toggle": "Apontar com a câmera",
++				"useDotPad": "Apontar no DOT Pad",
++				"register": "Registrar pelos cantos"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Avatar",
+ 				"heading": "Direção",
+@@ -3690,5 +3696,62 @@
+ 		"not-loaded": "A área ao seu redor ainda não foi pesquisada para {{name}}.",
+ 		"loadedOnly": "A busca e a exportação incluem apenas os dados carregados no momento.",
+ 		"trackingUnloaded": "Parou de rastrear {{name}} porque está fora da área carregada."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Tire as mãos do DOT Pad.",
++				"searching": "Procurando o DOT Pad.",
++				"corner": {
++					"topLeft": "Aponte para o canto superior esquerdo e segure.",
++					"topRight": "Canto superior direito.",
++					"bottomRight": "Canto inferior direito.",
++					"bottomLeft": "Canto inferior esquerdo."
++				},
++				"cornersRejected": "Cantos inválidos. Tente de novo.",
++				"liftHand": "Pronto. Levante a mão.",
++				"confirmTopLeft": "Encontrado. Toque o pino superior esquerdo.",
++				"confirmMissed": "Não é um canto. Use os cantos.",
++				"notFound": "DOT Pad não encontrado. Registre pelos cantos.",
++				"done": "Registrado.",
++				"cancelled": "Cancelado."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Mão esquerda",
++					"right": "Mão direita"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad perdido. Tire as mãos por um momento.",
++				"restored": "Encontrado de novo.",
++				"moved": "DOT Pad movido. Registrado de novo.",
++				"pinsNotVisible": "Pinos não visíveis. Mantenha o DOT Pad parado.",
++				"surface": {
++					"static": "Liso demais para acompanhar. Mantenha parado."
++				}
++			},
++			"camera": {
++				"noFrames": "Sem imagem da câmera. Feche outros apps que usam a câmera.",
++				"denied": "Câmera bloqueada. Permita-a nesta página."
++			}
++		},
++		"status": {
++			"off": "Desligado",
++			"starting": "Iniciando",
++			"idle": "Não registrado",
++			"corners": "Registrando",
++			"autoFind": "Procurando o DOT Pad",
++			"confirm": "Toque o pino superior esquerdo",
++			"handsOff": "Levante a mão",
++			"none": "Câmera ligada",
++			"loading": "Carregando",
++			"tracking": "Acompanhando",
++			"occluded": "Acompanhando, parcialmente coberto",
++			"static": "Sem acompanhar o movimento",
++			"lost": "Perdido",
++			"fixed": "Fixado"
++		},
++		"noExtent": "Mapa sem bordas. Use um DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/ru/translation.json b/public/locales/ru/translation.json
+index 2d52324e..8ff12090 100644
+--- a/public/locales/ru/translation.json
++++ b/public/locales/ru/translation.json
+@@ -1646,6 +1646,12 @@
+ 				"error": "Ошибка DOT Pad: {{message}}",
+ 				"genOneUpdate": "Уберите руки на время обновления DOT Pad."
+ 			},
++			"cameraPointer": {
++				"title": "Указка с камерой",
++				"toggle": "Указывать камерой",
++				"useDotPad": "Указывать на DOT Pad",
++				"register": "Откалибровать по углам"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "Аватар",
+ 				"heading": "Направление",
+@@ -3730,5 +3736,62 @@
+ 		"not-loaded": "Область вокруг вас ещё не проверена для {{name}}.",
+ 		"loadedOnly": "Поиск и экспорт включают только данные, загруженные в данный момент.",
+ 		"trackingUnloaded": "Отслеживание {{name}} остановлено: объект находится за пределами загруженной области."
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "Уберите руки с DOT Pad.",
++				"searching": "Поиск DOT Pad.",
++				"corner": {
++					"topLeft": "Укажите на верхний левый угол и задержите палец.",
++					"topRight": "Верхний правый угол.",
++					"bottomRight": "Нижний правый угол.",
++					"bottomLeft": "Нижний левый угол."
++				},
++				"cornersRejected": "Углы не подходят. Попробуйте снова.",
++				"liftHand": "Готово. Поднимите руку.",
++				"confirmTopLeft": "Найден. Коснитесь верхнего левого штифта.",
++				"confirmMissed": "Это не угол. Используйте углы.",
++				"notFound": "DOT Pad не найден. Откалибруйте по углам.",
++				"done": "Откалибровано.",
++				"cancelled": "Отменено."
++			},
++			"pointing": {
++				"hand": {
++					"left": "Левая рука",
++					"right": "Правая рука"
++				}
++			},
++			"tracking": {
++				"lost": "DOT Pad потерян. Уберите руки на мгновение.",
++				"restored": "Снова найден.",
++				"moved": "DOT Pad сдвинут. Откалиброван заново.",
++				"pinsNotVisible": "Штифты не видны. Не двигайте DOT Pad.",
++				"surface": {
++					"static": "Слишком однородно для отслеживания. Не двигайте."
++				}
++			},
++			"camera": {
++				"noFrames": "Нет изображения с камеры. Закройте другие приложения, использующие камеру.",
++				"denied": "Камера заблокирована. Разрешите её для этой страницы."
++			}
++		},
++		"status": {
++			"off": "Выключено",
++			"starting": "Запуск",
++			"idle": "Не откалибровано",
++			"corners": "Калибровка",
++			"autoFind": "Поиск DOT Pad",
++			"confirm": "Коснитесь верхнего левого штифта",
++			"handsOff": "Поднимите руку",
++			"none": "Камера включена",
++			"loading": "Загрузка",
++			"tracking": "Отслеживание",
++			"occluded": "Отслеживание, частично закрыто",
++			"static": "Движение не отслеживается",
++			"lost": "Потеряно",
++			"fixed": "Зафиксировано"
++		},
++		"noExtent": "У карты нет границ. Используйте DOT Pad."
+ 	}
+ }
+diff --git a/public/locales/zh/translation.json b/public/locales/zh/translation.json
+index a1074a96..02e12156 100644
+--- a/public/locales/zh/translation.json
++++ b/public/locales/zh/translation.json
+@@ -1612,6 +1612,12 @@
+ 				"error": "DOT Pad 错误：{{message}}",
+ 				"genOneUpdate": "DOT Pad 更新时请抬起双手。"
+ 			},
++			"cameraPointer": {
++				"title": "摄像头指点器",
++				"toggle": "用摄像头指点",
++				"useDotPad": "在 DOT Pad 上指点",
++				"register": "通过四角校准"
++			},
+ 			"tactileLegend": {
+ 				"avatar": "虚拟角色",
+ 				"heading": "朝向",
+@@ -3650,5 +3656,62 @@
+ 		"not-loaded": "尚未搜索 {{name}} 中您周围的区域。",
+ 		"loadedOnly": "搜索和导出仅包含当前已加载的数据。",
+ 		"trackingUnloaded": "已停止追踪 {{name}}，因为它位于已加载区域之外。"
++	},
++	"camio": {
++		"prompt": {
++			"register": {
++				"handsOff": "请将手从 DOT Pad 上移开。",
++				"searching": "正在寻找 DOT Pad。",
++				"corner": {
++					"topLeft": "指向左上角并保持不动。",
++					"topRight": "右上角。",
++					"bottomRight": "右下角。",
++					"bottomLeft": "左下角。"
++				},
++				"cornersRejected": "四角无效。请重试。",
++				"liftHand": "好了。请抬起手。",
++				"confirmTopLeft": "已找到。请触摸左上角的点。",
++				"confirmMissed": "不是角。请改用四角。",
++				"notFound": "未找到 DOT Pad。请通过四角校准。",
++				"done": "已校准。",
++				"cancelled": "已取消。"
++			},
++			"pointing": {
++				"hand": {
++					"left": "左手",
++					"right": "右手"
++				}
++			},
++			"tracking": {
++				"lost": "丢失 DOT Pad。请暂时移开双手。",
++				"restored": "已重新找到。",
++				"moved": "DOT Pad 已移动。已重新校准。",
++				"pinsNotVisible": "看不到点阵。请保持 DOT Pad 不动。",
++				"surface": {
++					"static": "图案太少，无法跟随。请保持不动。"
++				}
++			},
++			"camera": {
++				"noFrames": "没有摄像头画面。请关闭其他使用摄像头的应用。",
++				"denied": "摄像头被阻止。请允许此页面使用。"
++			}
++		},
++		"status": {
++			"off": "已关闭",
++			"starting": "正在启动",
++			"idle": "未校准",
++			"corners": "正在校准",
++			"autoFind": "正在寻找 DOT Pad",
++			"confirm": "触摸左上角的点",
++			"handsOff": "抬起手",
++			"none": "摄像头已开启",
++			"loading": "正在加载",
++			"tracking": "正在跟随",
++			"occluded": "正在跟随，部分被遮挡",
++			"static": "不跟随移动",
++			"lost": "已丢失",
++			"fixed": "已固定"
++		},
++		"noExtent": "地图没有边界。请使用 DOT Pad。"
+ 	}
+ }
+diff --git a/src/components/MapMenu/DisplayOptionsMenu.tsx b/src/components/MapMenu/DisplayOptionsMenu.tsx
+index 53d32a17..bbcacdc4 100644
+--- a/src/components/MapMenu/DisplayOptionsMenu.tsx
++++ b/src/components/MapMenu/DisplayOptionsMenu.tsx
+@@ -9,6 +9,7 @@ import {
+ 	withDisplayMode,
+ } from '../../lib/displayMode';
+ import { useRootStore } from '../../stores/useRootStore';
++import { CameraPointerControls } from './CameraPointerControls';
+ import { DotPadControls } from './DotPadControls';
+ import styles from './displayOptionsMenu.module.css';
+ import Menu from './Menu';
+@@ -224,6 +225,11 @@ export const DisplayOptionsMenu = inject('rootStore')(
+ 			defaultValue: 'Unavailable',
+ 		});
+ 		const preloadDotPad = useCallback(() => mapState.preloadDotPad(), [mapState]);
++		const camioStatus = mapState.camioPointerStatus;
++		// Once registered, how the surface is followed matters more than the phase.
++		const camioStatusLabel = t(
++			`camio.status.${camioStatus.phase === 'ready' ? camioStatus.tracking : camioStatus.phase}`,
++		);
+ 		const dotPadConnection = mapState.dotPadConnection;
+ 		const dotPadStatusLabel = (() => {
+ 			switch (dotPadConnection.state) {
+@@ -522,6 +528,21 @@ export const DisplayOptionsMenu = inject('rootStore')(
+ 							onDisconnect={() => mapState.disconnectDotPad()}
+ 							onPreload={preloadDotPad}
+ 						/>
++						<CameraPointerControls
++							on={camioStatus.phase !== 'off'}
++							statusLabel={camioStatusLabel}
++							dotPadConnected={dotPadConnection.state === 'connected'}
++							useDotPad={mapState.camioUseDotPad}
++							labels={{
++								title: t('mainMenu.displayOptions.cameraPointer.title'),
++								toggle: t('mainMenu.displayOptions.cameraPointer.toggle'),
++								useDotPad: t('mainMenu.displayOptions.cameraPointer.useDotPad'),
++								register: t('mainMenu.displayOptions.cameraPointer.register'),
++							}}
++							onToggle={() => mapState.toggleCamioPointer()}
++							onToggleUseDotPad={() => mapState.toggleCamioUseDotPad()}
++							onRegister={() => mapState.registerCamioPointerByCorners()}
++						/>
+ 					</div>
+ 				</MenuList>
+ 			</Menu>
+diff --git a/src/components/MapMenu/DotPadControls.tsx b/src/components/MapMenu/DotPadControls.tsx
+index a7bb5ded..a5dc8402 100644
+--- a/src/components/MapMenu/DotPadControls.tsx
++++ b/src/components/MapMenu/DotPadControls.tsx
+@@ -43,7 +43,7 @@ function focusHardwareAction(
+ 	actions[(currentIndex + direction + actions.length) % actions.length]?.focus();
+ }
+ 
+-function handleHardwareActionKeyDown(
++export function handleHardwareActionKeyDown(
+ 	event: React.KeyboardEvent<HTMLButtonElement>,
+ ): void {
+ 	if (event.key === 'Tab') {
+diff --git a/src/components/MapViewer/MapViewer.tsx b/src/components/MapViewer/MapViewer.tsx
+index 9180012e..f5bf092e 100644
+--- a/src/components/MapViewer/MapViewer.tsx
++++ b/src/components/MapViewer/MapViewer.tsx
+@@ -32,6 +32,7 @@ import {
+ import { Soundpack } from '../../modules/soundpack';
+ import {
+ 	connectTactileMessageRow,
++	createCamioController,
+ 	createDotPadController,
+ 	TactileMessageRow,
+ 	TactileTool,
+@@ -228,6 +229,7 @@ class MapViewer extends React.Component<
+ 	tactileMessageRow: TactileMessageRow | null = null;
+ 	private disconnectTactileMessageRow: (() => void) | null = null;
+ 	dotPadController: ReturnType<typeof createDotPadController> | null = null;
++	camioController: ReturnType<typeof createCamioController> | null = null;
+ 
+ 	boundActions: { [key: string]: BoundEventMapEntry } = {};
+ 	static contextType = HeadingLevelContext;
+@@ -677,6 +679,14 @@ class MapViewer extends React.Component<
+ 			),
+ 			onConnectionChange: (connection) => {
+ 				mapState.setDotPadConnection(connection);
++				// Pointing on the DOT Pad ends with it; on another surface it goes on.
++				if (
++					connection.state !== 'connected' &&
++					this.camioController?.surface === 'dotpad'
++				) {
++					this.camioController.stop();
++				}
++				this.syncCamioSurface();
+ 				// The tutorial phrases its prompts for whichever input is in use.
+ 				if (connection.state === 'connected') {
+ 					// Connecting happens from the display options menu. Leave it
+@@ -696,6 +706,20 @@ class MapViewer extends React.Component<
+ 				}
+ 			},
+ 		});
++		this.camioController = createCamioController({
++			tactileTool: this.tactileTool,
++			announce: (message) => this.speak(message),
++			translate: (code, defaultValue, params) =>
++				this.props.t(`camio.prompt.${code}`, { defaultValue, ...params }),
++			// An open hand is the camera's stop-speech gesture. It takes the same
++			// path as the DOT Pad's stop-speech chord, tutorial handling included.
++			stopSpeech: () => this.executeCommand('stopSpeech'),
++			onStatusChange: (status) => mapState.setCamioPointerStatus(status),
++			noExtentMessage: this.props.t('camio.noExtent', {
++				defaultValue: 'No map edges. Use a DOT Pad.',
++			}),
++		});
++		this.syncCamioSurface();
+ 
+ 		this.tools = [
+ 			<AudioOverviewTool
+@@ -1115,6 +1139,8 @@ class MapViewer extends React.Component<
+ 	};
+ 
+ 	private disposeTactile(): void {
++		this.camioController?.dispose();
++		this.camioController = null;
+ 		this.dotPadController?.dispose();
+ 		this.dotPadController = null;
+ 		this.disconnectTactileMessageRow?.();
+@@ -1140,6 +1166,21 @@ class MapViewer extends React.Component<
+ 		this.dotPadController?.disconnect();
+ 	};
+ 
++	public syncCamioSurface = (): void => {
++		this.camioController?.setSurface(this.rootStore.mapState.camioSurface);
++	};
++
++	public toggleCamioPointer = async (): Promise<void> => {
++		if (this.rootStore.mapState.camioPointerStatus.phase === 'off') {
++			this.syncCamioSurface();
++			await this.camioController?.start();
++		} else this.camioController?.stop();
++	};
++
++	public registerCamioPointerByCorners = (): void => {
++		this.camioController?.registerByCorners();
++	};
++
+ 	endDemoMode = () => {
+ 		this.rootStore.mapState.setDemoMode(false);
+ 		this.demoSystem.checkAndAdvanceDemoStep('StopTutorialCommand');
+diff --git a/src/lib/build-embed-string.test.ts b/src/lib/build-embed-string.test.ts
+index 4bd6e668..26ca4e37 100644
+--- a/src/lib/build-embed-string.test.ts
++++ b/src/lib/build-embed-string.test.ts
+@@ -40,4 +40,9 @@ describe('buildDefinitionEmbedString', () => {
+ 		const result = buildDefinitionEmbedString(base);
+ 		expect(result).toContain('allowfullscreen');
+ 	});
++
++	it('lets the embedded map use the camera for the camera pointer', () => {
++		const result = buildDefinitionEmbedString(base);
++		expect(result).toContain('allow="camera; fullscreen"');
++	});
+ });
+diff --git a/src/lib/build-embed-string.ts b/src/lib/build-embed-string.ts
+index 47b3d73a..cdd5e4db 100644
+--- a/src/lib/build-embed-string.ts
++++ b/src/lib/build-embed-string.ts
+@@ -34,5 +34,5 @@ export const buildDefinitionEmbedString = ({
+ 		? `${definitionSlug}-${definitionId}`
+ 		: String(definitionId);
+ 	const src = `${server}/embed/${segment}${query ? `?${query}` : ''}`;
+-	return `<iframe title="${name}" src="${src}" width="${width}" height="${height}" style="border: 0" allowfullscreen></iframe>`;
++	return `<iframe title="${name}" src="${src}" width="${width}" height="${height}" style="border: 0" allow="camera; fullscreen" allowfullscreen></iframe>`;
+ };
+diff --git a/src/modules/tactile/index.ts b/src/modules/tactile/index.ts
+index c34eefa8..9bfa8bcc 100644
+--- a/src/modules/tactile/index.ts
++++ b/src/modules/tactile/index.ts
+@@ -1,4 +1,9 @@
+ export { createTactileOrientationCalibrationFrame } from './calibration';
++export {
++	type CamioPointerStatus,
++	type CamioSurface,
++	createCamioController,
++} from './camio/createCamioController';
+ export { connectTactileMessageRow } from './connectTactileMessageRow';
+ export { createDotPadController } from './dotPad/createDotPadController';
+ export type {
+diff --git a/src/stores/MapStateStore.tactile.test.ts b/src/stores/MapStateStore.tactile.test.ts
+index 6e7beb7a..47bfff09 100644
+--- a/src/stores/MapStateStore.tactile.test.ts
++++ b/src/stores/MapStateStore.tactile.test.ts
+@@ -1,4 +1,4 @@
+-import { describe, expect, it } from 'vitest';
++import { describe, expect, it, vi } from 'vitest';
+ import { createTestMapWorldWithRootStore } from '../modules/__fixtures__/testStores';
+ 
+ describe('MapState tactile debug view', () => {
+@@ -28,4 +28,40 @@ describe('MapState tactile debug view', () => {
+ 
+ 		world.dispose();
+ 	});
++
++	it('tracks the camera pointer status for the camera pointer controls', () => {
++		const world = createTestMapWorldWithRootStore();
++		const mapState = world.rootStore.mapState;
++
++		expect(mapState.camioPointerStatus).toEqual({ phase: 'off' });
++		mapState.setCamioPointerStatus({ phase: 'starting' });
++		expect(mapState.camioPointerStatus.phase).toBe('starting');
++
++		world.dispose();
++	});
++
++	it('points on a connected DOT Pad unless switched off, else on any rectangle', () => {
++		const world = createTestMapWorldWithRootStore();
++		const mapState = world.rootStore.mapState;
++		const syncCamioSurface = vi.fn();
++		Object.assign(mapState.mapViewer, { syncCamioSurface });
++
++		expect(mapState.camioUseDotPad).toBe(true);
++		expect(mapState.camioSurface).toBe('rect');
++
++		mapState.setDotPadConnection({
++			state: 'connected',
++			transport: 'usb',
++			generation: 'dot-pad-x',
++			refreshTimeMs: 900,
++		});
++		expect(mapState.camioSurface).toBe('dotpad');
++
++		mapState.toggleCamioUseDotPad();
++		expect(mapState.camioUseDotPad).toBe(false);
++		expect(syncCamioSurface).toHaveBeenCalledTimes(1);
++		expect(mapState.camioSurface).toBe('rect');
++
++		world.dispose();
++	});
+ });
+diff --git a/src/stores/MapStateStore.ts b/src/stores/MapStateStore.ts
+index d3053fe4..211cd0f4 100644
+--- a/src/stores/MapStateStore.ts
++++ b/src/stores/MapStateStore.ts
+@@ -5,7 +5,11 @@ import { MapRef } from 'react-map-gl/maplibre';
+ import type { MapViewer } from '../components/MapViewer/MapViewer';
+ import type { DemoSystem } from '../modules/demo';
+ import { SpeechOutput } from '../modules/engine/speech';
+-import type { DotPadConnection } from '../modules/tactile';
++import type {
++	CamioPointerStatus,
++	CamioSurface,
++	DotPadConnection,
++} from '../modules/tactile';
+ import { MapWorld } from '../modules/world';
+ import { MapFeature } from '../modules/world/MapFeature';
+ import type { LngLat } from '../types/coordinates';
+@@ -64,6 +68,9 @@ export default class MapState {
+ 	showObjectLabels: boolean = true;
+ 	showTactilePinView: boolean = false;
+ 	dotPadConnection: DotPadConnection = { state: 'disconnected' };
++	camioPointerStatus: CamioPointerStatus = { phase: 'off' };
++	/** Point on a connected DOT Pad, or (false) on another surface such as a printed map. */
++	camioUseDotPad: boolean = true;
+ 	hasIllustratedBaseLayer: boolean = false;
+ 	showIllustratedBaseLayer: boolean = true;
+ 	preExpandedState: {
+@@ -102,6 +109,8 @@ export default class MapState {
+ 			showObjectLabels: observable,
+ 			showTactilePinView: observable,
+ 			dotPadConnection: observable.ref,
++			camioPointerStatus: observable.ref,
++			camioUseDotPad: observable,
+ 			hasIllustratedBaseLayer: observable,
+ 			showIllustratedBaseLayer: observable,
+ 			preExpandedState: observable,
+@@ -126,6 +135,8 @@ export default class MapState {
+ 			toggleObjectLabels: action,
+ 			toggleTactilePinView: action,
+ 			setDotPadConnection: action,
++			setCamioPointerStatus: action,
++			toggleCamioUseDotPad: action,
+ 			setHasIllustratedBaseLayer: action,
+ 			setShowIllustratedBaseLayer: action,
+ 			saveExpandState: action,
+@@ -230,6 +241,30 @@ export default class MapState {
+ 		this.mapViewer.disconnectDotPad();
+ 	}
+ 
++	setCamioPointerStatus(status: CamioPointerStatus) {
++		this.camioPointerStatus = status;
++	}
++
++	toggleCamioPointer(): Promise<void> {
++		return this.mapViewer.toggleCamioPointer();
++	}
++
++	registerCamioPointerByCorners(): void {
++		this.mapViewer.registerCamioPointerByCorners();
++	}
++
++	toggleCamioUseDotPad() {
++		this.camioUseDotPad = !this.camioUseDotPad;
++		this.mapViewer.syncCamioSurface();
++	}
++
++	/** Where the camera pointer points: a connected DOT Pad unless switched off, else any rectangle. */
++	get camioSurface(): CamioSurface {
++		return this.camioUseDotPad && this.dotPadConnection.state === 'connected'
++			? 'dotpad'
++			: 'rect';
++	}
++
+ 	setHasIllustratedBaseLayer(value: boolean) {
+ 		this.hasIllustratedBaseLayer = value;
+ 	}
+diff --git a/src/modules/tactile/camio/createCamioController.ts b/src/modules/tactile/camio/createCamioController.ts
+new file mode 100644
+index 00000000..5a7e46b3
+--- /dev/null
++++ b/src/modules/tactile/camio/createCamioController.ts
+@@ -0,0 +1,224 @@
++import { worldPosition } from '../../../types/coordinates';
++import type {
++	CamioPointer,
++	PointerStatus,
++	SurfaceSpec,
++} from '../../../vendor/camio/CamioPointer-0.2.0.js';
++import type { TactileTool } from '../TactileTool';
++import { tactileWorldBounds } from '../viewport';
++
++export type CamioPointerStatus = PointerStatus | { phase: 'off' | 'starting' };
++
++/** Where the camera points: the DOT Pad's pins, or any other rectangle (a printed map). */
++export type CamioSurface = 'dotpad' | 'rect';
++
++export interface CreateCamioControllerOptions {
++	tactileTool: TactileTool;
++	announce(message: string): void;
++	/** Localise a library prompt code, e.g. t(`camio.prompt.${code}`, { defaultValue }). */
++	translate(
++		code: string,
++		defaultValue: string,
++		params?: Record<string, string | number>,
++	): string;
++	/**
++	 * Run the app's stop-speech command. Called when an open hand is shown,
++	 * the camera equivalent of the DOT Pad's stop-speech chord.
++	 */
++	stopSpeech(): void;
++	onStatusChange(status: CamioPointerStatus): void;
++	/** Announced when the map has no extent to put on a rectangle. */
++	noExtentMessage: string;
++	/** Where public/vendor/mediapipe is served. */
++	assetsBase?: string;
++	/** Where public/vendor/opencv/opencv.js is served (loaded only for a rect surface). */
++	opencvUrl?: string;
++}
++
++/**
++ * Camera pointer: the cell under a pointing fingertip moves the avatar there,
++ * and an open hand stops speech. On the DOT Pad the cell is a pin of the
++ * tactile viewport; on any other rectangle (registered by its four corners)
++ * the sheet spans the map's extent, its top-left corner the north-west. The
++ * vendored library (with the bundled MediaPipe JS) is a lazy chunk, loaded only
++ * when the pointer is first started; OpenCV.js is fetched only for a rect
++ * surface. All camera processing stays on the device.
++ */
++export function createCamioController(options: CreateCamioControllerOptions) {
++	const { renderer } = options.tactileTool;
++	let pointer: CamioPointer | null = null;
++	let loadPromise: Promise<CamioPointer> | null = null;
++	let deactivate: (() => void) | null = null;
++	let disposed = false;
++	let surface: CamioSurface = 'dotpad';
++	/**
++	 * Bumped by every start and stop, so a start still waiting on the chunk
++	 * or the camera can tell it was overtaken (switched off, or the DOT Pad
++	 * went away) and must not leave the camera running.
++	 */
++	let attempt = 0;
++	/** Whether the latest start or stop asked for the camera to be on. */
++	let wanted = false;
++
++	const spec = (kind: CamioSurface): SurfaceSpec =>
++		kind === 'dotpad'
++			? { kind: 'dotpad', border: renderer.viewport.overlapPins }
++			: { kind: 'rect' };
++
++	/** [minX, minY, maxX, maxY] of the map, or null when it has none (or no area). */
++	const extent = () => {
++		const e = renderer.world.extentBounds;
++		if (!e) return null;
++		const [minX, minY, maxX, maxY] = e;
++		return maxX > minX && maxY > minY ? e : null;
++	};
++
++	/** Hold the pin frame live only while the camera drives the avatar on the DOT Pad. */
++	const syncActivation = () => {
++		const want = wanted && surface === 'dotpad' && !disposed;
++		if (want) deactivate ??= renderer.activate();
++		else {
++			deactivate?.();
++			deactivate = null;
++		}
++	};
++
++	const load = () => {
++		loadPromise ??= import(
++			/* webpackChunkName: "camio-pointer" */ '../../../vendor/camio/CamioPointer-0.2.0.js'
++		).then(({ createCamioPointer }) => {
++			if (disposed) throw new Error('Camio pointer was disposed');
++			const created = createCamioPointer({
++				assetsBase: options.assetsBase ?? '/vendor/mediapipe/',
++				opencvUrl: options.opencvUrl ?? '/vendor/opencv/opencv.js',
++				surface: spec(surface),
++			});
++			created.on('prompt', ({ code, text, params }) =>
++				options.announce(options.translate(code, text, params)),
++			);
++			created.on('status', (status) => options.onStatusChange(status));
++			created.on('openHand', () => options.stopSpeech());
++			created.on('point', (p) => {
++				// The event's own surface, so a late event after a switch is safe.
++				if (p.surface === 'dotpad') {
++					// The overlap band pages the viewport: a finger resting there must not.
++					if (p.inBorder) return;
++					const { viewport, world } = renderer;
++					const bounds = tactileWorldBounds(viewport);
++					world.avatar.setPosition(
++						worldPosition(
++							bounds.left + p.col * viewport.metersPerPin,
++							bounds.top - p.row * viewport.metersPerPin,
++						),
++					);
++					return;
++				}
++				const e = extent();
++				if (!e) return;
++				const [minX, minY, maxX, maxY] = e;
++				renderer.world.avatar.setPosition(
++					worldPosition(minX + p.u * (maxX - minX), maxY - p.v * (maxY - minY)),
++				);
++			});
++			pointer = created;
++			return created;
++		});
++		const pending = loadPromise;
++		// A failed chunk load must not stay cached (same as the DOT Pad SDK).
++		pending.catch(() => {
++			if (loadPromise === pending) loadPromise = null;
++		});
++		return pending;
++	};
++
++	const stop = () => {
++		attempt += 1;
++		wanted = false;
++		pointer?.stop();
++		syncActivation();
++		options.onStatusChange({ phase: 'off' });
++	};
++
++	const noExtent = () => {
++		options.announce(options.noExtentMessage);
++		options.onStatusChange({ phase: 'off' });
++	};
++
++	return {
++		preload: () => {
++			if (disposed) return;
++			load().catch(() => {
++				// A preload failure is silent: start() reports it.
++			});
++		},
++		/** Load, open the camera, and register the surface if not registered yet. */
++		start: async () => {
++			if (disposed) return;
++			if (surface === 'rect' && !extent()) {
++				attempt += 1;
++				wanted = false;
++				noExtent();
++				return;
++			}
++			const current = ++attempt;
++			wanted = true;
++			const overtaken = () => disposed || current !== attempt;
++			options.onStatusChange({ phase: 'starting' });
++			try {
++				const loaded = await load();
++				if (overtaken()) return;
++				if (loaded.surface !== surface) loaded.setSurface(spec(surface));
++				syncActivation();
++				await loaded.start();
++				if (overtaken()) {
++					// Switched off while the camera was opening: close it again,
++					// unless a newer start is already reusing it.
++					if (!disposed && !wanted) loaded.stop();
++					return;
++				}
++				options.onStatusChange(loaded.status);
++				if (!loaded.registration) void loaded.register();
++			} catch (error) {
++				if (overtaken()) return;
++				stop();
++				throw error;
++			}
++		},
++		stop,
++		/** Switch surface; while running the new one is registered right away. */
++		setSurface: (next: CamioSurface) => {
++			if (disposed || next === surface) return;
++			surface = next;
++			if (!wanted || !pointer?.running) {
++				if (pointer && pointer.surface !== next) pointer.setSurface(spec(next));
++				return;
++			}
++			if (next === 'rect' && !extent()) {
++				stop();
++				options.announce(options.noExtentMessage);
++				return;
++			}
++			pointer.setSurface(spec(next));
++			syncActivation();
++			void pointer.register();
++		},
++		get surface() {
++			return surface;
++		},
++		get active() {
++			return pointer?.running ?? false;
++		},
++		register: () => pointer?.register(),
++		registerByCorners: () => pointer?.registerByCorners(),
++		cancelRegistration: () => pointer?.cancel(),
++		dispose: () => {
++			disposed = true;
++			wanted = false;
++			deactivate?.();
++			deactivate = null;
++			pointer?.dispose();
++			pointer = null;
++			loadPromise = null;
++		},
++	};
++}
+diff --git a/src/modules/tactile/camio/createCamioController.test.ts b/src/modules/tactile/camio/createCamioController.test.ts
+new file mode 100644
+index 00000000..33444fd1
+--- /dev/null
++++ b/src/modules/tactile/camio/createCamioController.test.ts
+@@ -0,0 +1,338 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import type { TactileTool } from '../TactileTool';
++import { tactileWorldBounds, worldToPin } from '../viewport';
++import { createCamioController } from './createCamioController';
++
++type Listener = (payload: never) => void;
++
++const mocked = vi.hoisted(() => ({
++	listeners: new Map<string, Listener>(),
++	start: vi.fn(async () => {}),
++	stop: vi.fn(),
++	dispose: vi.fn(),
++	register: vi.fn(async () => null),
++	setSurface: vi.fn(),
++	surface: 'dotpad' as string,
++	registration: null as unknown,
++	options: null as unknown,
++}));
++
++vi.mock('../../../vendor/camio/CamioPointer-0.2.0.js', () => ({
++	createCamioPointer: (options: { surface: { kind: string } }) => {
++		mocked.options = options;
++		mocked.surface = options.surface.kind;
++		return {
++			on: (type: string, listener: Listener) => {
++				mocked.listeners.set(type, listener);
++				return () => {};
++			},
++			start: mocked.start,
++			stop: mocked.stop,
++			dispose: mocked.dispose,
++			register: mocked.register,
++			setSurface: (spec: { kind: string }) => {
++				mocked.surface = spec.kind;
++				mocked.setSurface(spec);
++			},
++			get surface() {
++				return mocked.surface;
++			},
++			registerByCorners: vi.fn(),
++			cancel: vi.fn(),
++			get registration() {
++				return mocked.registration;
++			},
++			status: { phase: 'idle', tracking: 'none' },
++			running: true,
++		};
++	},
++}));
++
++const emit = (type: string, payload: unknown) =>
++	(mocked.listeners.get(type) as (p: unknown) => void)(payload);
++
++const makeHarness = (
++	extentBounds: number[] | null = [-200, -100, 400, 300],
++) => {
++	const viewport = {
++		center: [100, 50],
++		width: 60,
++		height: 40,
++		metersPerPin: 0.5,
++		overlapPins: 2,
++	};
++	const setPosition = vi.fn();
++	const deactivate = vi.fn();
++	const activate = vi.fn(() => deactivate);
++	const tactileTool = {
++		renderer: {
++			viewport,
++			world: { avatar: { setPosition }, extentBounds },
++			activate,
++		},
++	} as unknown as TactileTool;
++	const announce = vi.fn();
++	const stopSpeech = vi.fn();
++	const onStatusChange = vi.fn();
++	const controller = createCamioController({
++		tactileTool,
++		announce,
++		translate: (code, text, params) =>
++			`[${code}] ${text}${params ? ` ${JSON.stringify(params)}` : ''}`,
++		stopSpeech,
++		onStatusChange,
++		noExtentMessage: 'No map edges here. Use a DOT Pad.',
++	});
++	return {
++		controller,
++		viewport,
++		setPosition,
++		activate,
++		deactivate,
++		announce,
++		stopSpeech,
++		onStatusChange,
++	};
++};
++
++beforeEach(() => {
++	mocked.listeners.clear();
++	mocked.registration = null;
++	mocked.options = null;
++	mocked.surface = 'dotpad';
++	vi.clearAllMocks();
++});
++
++describe('createCamioController', () => {
++	it('loads lazily, starts the camera and registers when unregistered', async () => {
++		const { controller } = makeHarness();
++		expect(mocked.options).toBeNull();
++		await controller.start();
++		expect(mocked.options).toMatchObject({
++			assetsBase: '/vendor/mediapipe/',
++			opencvUrl: '/vendor/opencv/opencv.js',
++			surface: { kind: 'dotpad', border: 2 },
++		});
++		expect(mocked.start).toHaveBeenCalledOnce();
++		expect(mocked.register).toHaveBeenCalledOnce();
++	});
++
++	it('DOT Pad: moves the avatar onto the pointed pin (inverse of worldToPin), never in the border', async () => {
++		const { controller, viewport, setPosition } = makeHarness();
++		await controller.start();
++		emit('point', {
++			surface: 'dotpad',
++			col: 17,
++			row: 9,
++			u: 0,
++			v: 0,
++			inBorder: false,
++		});
++		const [position] = setPosition.mock.calls[0];
++		const bounds = tactileWorldBounds(viewport as never);
++		expect(position).toEqual([bounds.left + 17 * 0.5, bounds.top - 9 * 0.5]);
++		expect(worldToPin(position, viewport as never)).toEqual([17, 9]);
++		emit('point', {
++			surface: 'dotpad',
++			col: 1,
++			row: 9,
++			u: 0,
++			v: 0,
++			inBorder: true,
++		});
++		expect(setPosition).toHaveBeenCalledOnce();
++	});
++
++	it('rect: (u, v) spans the map extent, top-left = north-west', async () => {
++		const { controller, setPosition, activate } = makeHarness();
++		controller.setSurface('rect');
++		await controller.start();
++		expect(mocked.options).toMatchObject({ surface: { kind: 'rect' } });
++		expect(activate).not.toHaveBeenCalled();
++		emit('point', {
++			surface: 'rect',
++			col: 0,
++			row: 0,
++			u: 0,
++			v: 0,
++			inBorder: false,
++		});
++		emit('point', {
++			surface: 'rect',
++			col: 117,
++			row: 83,
++			u: 1,
++			v: 1,
++			inBorder: false,
++		});
++		emit('point', {
++			surface: 'rect',
++			col: 59,
++			row: 42,
++			u: 0.25,
++			v: 0.5,
++			inBorder: false,
++		});
++		expect(setPosition.mock.calls.map(([p]) => p)).toEqual([
++			[-200, 300],
++			[400, -100],
++			[-50, 100],
++		]);
++	});
++
++	it('rect without a map extent: start announces and stays off', async () => {
++		const { controller, announce, onStatusChange } = makeHarness(null);
++		controller.setSurface('rect');
++		await controller.start();
++		expect(announce).toHaveBeenCalledWith('No map edges here. Use a DOT Pad.');
++		expect(onStatusChange).toHaveBeenLastCalledWith({ phase: 'off' });
++		expect(mocked.options).toBeNull();
++		expect(mocked.start).not.toHaveBeenCalled();
++	});
++
++	it('activates the pin frame only while running on the DOT Pad', async () => {
++		const { controller, activate, deactivate } = makeHarness();
++		await controller.start();
++		expect(activate).toHaveBeenCalledOnce();
++		controller.setSurface('rect');
++		expect(deactivate).toHaveBeenCalledOnce();
++		controller.setSurface('dotpad');
++		expect(activate).toHaveBeenCalledTimes(2);
++	});
++
++	it('setSurface while running switches the library pointer and registers', async () => {
++		const { controller } = makeHarness();
++		await controller.start();
++		mocked.register.mockClear();
++		controller.setSurface('rect');
++		expect(mocked.setSurface).toHaveBeenCalledWith({ kind: 'rect' });
++		expect(mocked.register).toHaveBeenCalledOnce();
++		expect(controller.surface).toBe('rect');
++		controller.setSurface('rect');
++		expect(mocked.setSurface).toHaveBeenCalledOnce();
++	});
++
++	it('setSurface to rect while running with no extent stops and announces', async () => {
++		const { controller, announce, onStatusChange } = makeHarness(null);
++		await controller.start();
++		controller.setSurface('rect');
++		expect(mocked.stop).toHaveBeenCalled();
++		expect(mocked.setSurface).not.toHaveBeenCalled();
++		expect(announce).toHaveBeenCalledWith('No map edges here. Use a DOT Pad.');
++		expect(onStatusChange).toHaveBeenLastCalledWith({ phase: 'off' });
++	});
++
++	it('a late DOT Pad point after switching to rect still maps as a pin', async () => {
++		const { controller, viewport, setPosition } = makeHarness();
++		await controller.start();
++		controller.setSurface('rect');
++		emit('point', {
++			surface: 'dotpad',
++			col: 17,
++			row: 9,
++			u: 0.3,
++			v: 0.2,
++			inBorder: false,
++		});
++		const bounds = tactileWorldBounds(viewport as never);
++		expect(setPosition.mock.calls[0][0]).toEqual([
++			bounds.left + 8.5,
++			bounds.top - 4.5,
++		]);
++	});
++
++	it('announces localised prompts, including the tracked hand, and forwards status', async () => {
++		const { controller, announce, onStatusChange } = makeHarness();
++		await controller.start();
++		emit('prompt', { code: 'register.done', text: 'Registered.' });
++		expect(announce).toHaveBeenCalledWith('[register.done] Registered.');
++		emit('prompt', { code: 'pointing.hand.left', text: 'Left hand' });
++		expect(announce).toHaveBeenLastCalledWith('[pointing.hand.left] Left hand');
++		emit('prompt', { code: 'some.code', text: 'Text', params: { n: 2 } });
++		expect(announce).toHaveBeenLastCalledWith('[some.code] Text {"n":2}');
++		emit('status', {
++			phase: 'ready',
++			tracking: 'tracking',
++			gesture: 'pointing',
++			side: 'right',
++		});
++		expect(onStatusChange).toHaveBeenLastCalledWith({
++			phase: 'ready',
++			tracking: 'tracking',
++			gesture: 'pointing',
++			side: 'right',
++		});
++	});
++
++	it('stops speech when an open hand is shown, without moving the avatar', async () => {
++		const { controller, stopSpeech, setPosition, announce } = makeHarness();
++		await controller.start();
++		expect(stopSpeech).not.toHaveBeenCalled();
++		emit('openHand', { side: 'left' });
++		expect(stopSpeech).toHaveBeenCalledOnce();
++		emit('openHand', { side: null });
++		expect(stopSpeech).toHaveBeenCalledTimes(2);
++		expect(setPosition).not.toHaveBeenCalled();
++		expect(announce).not.toHaveBeenCalled();
++	});
++
++	it('stop and dispose release the camera and the renderer', async () => {
++		const { controller, deactivate, onStatusChange } = makeHarness();
++		await controller.start();
++		controller.stop();
++		expect(mocked.stop).toHaveBeenCalled();
++		expect(deactivate).toHaveBeenCalledOnce();
++		expect(onStatusChange).toHaveBeenLastCalledWith({ phase: 'off' });
++		controller.dispose();
++		expect(mocked.dispose).toHaveBeenCalledOnce();
++	});
++
++	it('reports a failed start as off and lets the next start retry', async () => {
++		const { controller, deactivate, onStatusChange } = makeHarness();
++		mocked.start.mockRejectedValueOnce(new Error('camera denied'));
++		await expect(controller.start()).rejects.toThrow('camera denied');
++		expect(onStatusChange).toHaveBeenLastCalledWith({ phase: 'off' });
++		expect(deactivate).toHaveBeenCalledOnce();
++		await controller.start();
++		expect(mocked.start).toHaveBeenCalledTimes(2);
++	});
++
++	it('never opens the camera when switched off while the chunk loads', async () => {
++		const { controller, onStatusChange, deactivate } = makeHarness();
++		const starting = controller.start();
++		controller.stop();
++		await starting;
++		expect(mocked.start).not.toHaveBeenCalled();
++		expect(deactivate).not.toHaveBeenCalled();
++		expect(onStatusChange).toHaveBeenLastCalledWith({ phase: 'off' });
++	});
++
++	it('closes the camera again when switched off while it opens', async () => {
++		const { controller, onStatusChange, deactivate } = makeHarness();
++		let opened = () => {};
++		mocked.start.mockImplementationOnce(
++			() =>
++				new Promise<void>((resolve) => {
++					opened = resolve;
++				}),
++		);
++		const starting = controller.start();
++		await vi.waitFor(() => expect(mocked.start).toHaveBeenCalledOnce());
++		controller.stop();
++		opened();
++		await starting;
++		// Once by stop(), once more for the camera that finished opening late.
++		expect(mocked.stop).toHaveBeenCalledTimes(2);
++		expect(deactivate).toHaveBeenCalledOnce();
++		expect(mocked.register).not.toHaveBeenCalled();
++		expect(onStatusChange).toHaveBeenLastCalledWith({ phase: 'off' });
++	});
++
++	it('does nothing after dispose', async () => {
++		const { controller, onStatusChange } = makeHarness();
++		controller.dispose();
++		await controller.start();
++		expect(mocked.options).toBeNull();
++		expect(onStatusChange).not.toHaveBeenCalled();
++	});
++});
+diff --git a/src/components/MapMenu/CameraPointerControls.tsx b/src/components/MapMenu/CameraPointerControls.tsx
+new file mode 100644
+index 00000000..8b82c3c1
+--- /dev/null
++++ b/src/components/MapMenu/CameraPointerControls.tsx
+@@ -0,0 +1,85 @@
++import { handleHardwareActionKeyDown } from './DotPadControls';
++import styles from './displayOptionsMenu.module.css';
++
++export interface CameraPointerControlLabels {
++	title: string;
++	toggle: string;
++	useDotPad: string;
++	register: string;
++}
++
++export interface CameraPointerControlsProps {
++	/** The camera is on (any phase but off). */
++	on: boolean;
++	statusLabel: string;
++	/** "Point on the DOT Pad" is offered only while one is connected. */
++	dotPadConnected: boolean;
++	useDotPad: boolean;
++	labels: CameraPointerControlLabels;
++	onToggle(): Promise<void>;
++	onToggleUseDotPad(): void;
++	onRegister(): void;
++}
++
++function reportActionError(error: unknown): void {
++	console.error('Camera pointer action failed:', error);
++}
++
++/**
++ * The camera fingertip pointer: on a connected DOT Pad, or on any rectangle
++ * (a printed map) registered by its corners.
++ */
++export function CameraPointerControls({
++	on,
++	statusLabel,
++	dotPadConnected,
++	useDotPad,
++	labels,
++	onToggle,
++	onToggleUseDotPad,
++	onRegister,
++}: CameraPointerControlsProps) {
++	return (
++		<section className={styles.group}>
++			<h3 className={styles.groupTitle}>{labels.title}</h3>
++			<p className={styles.deviceStatus} role="status" aria-live="polite">
++				{statusLabel}
++			</p>
++			<button
++				type="button"
++				className={`${styles.optionItem} ${styles.deviceAction}`}
++				role="menuitemcheckbox"
++				aria-checked={on}
++				onKeyDown={handleHardwareActionKeyDown}
++				onClick={() => {
++					onToggle().catch(reportActionError);
++				}}
++			>
++				{labels.toggle}
++			</button>
++			{dotPadConnected ? (
++				<button
++					type="button"
++					className={`${styles.optionItem} ${styles.deviceAction}`}
++					role="menuitemcheckbox"
++					aria-checked={useDotPad}
++					onKeyDown={handleHardwareActionKeyDown}
++					onClick={onToggleUseDotPad}
++				>
++					{labels.useDotPad}
++				</button>
++			) : null}
++			{on ? (
++				<button
++					type="button"
++					className={`${styles.optionItem} ${styles.deviceAction}`}
++					role="menuitem"
++					onKeyDown={handleHardwareActionKeyDown}
++					onClick={onRegister}
++				>
++					{labels.register}
++				</button>
++			) : null}
++		</section>
++	);
++}
+diff --git a/src/components/MapMenu/CameraPointerControls.test.tsx b/src/components/MapMenu/CameraPointerControls.test.tsx
+new file mode 100644
+index 00000000..2a879795
+--- /dev/null
++++ b/src/components/MapMenu/CameraPointerControls.test.tsx
+@@ -0,0 +1,104 @@
++import '@testing-library/jest-dom/vitest';
++import {
++	cleanup,
++	fireEvent,
++	render,
++	screen,
++	waitFor,
++} from '@testing-library/react';
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { CameraPointerControls } from './CameraPointerControls';
++
++afterEach(cleanup);
++
++const labels = {
++	title: 'Camera pointer',
++	toggle: 'Point with the camera',
++	useDotPad: 'Point on the DOT Pad',
++	register: 'Register by corners',
++};
++
++const makeProps = () => ({
++	on: false,
++	statusLabel: 'Off',
++	dotPadConnected: false,
++	useDotPad: true,
++	labels,
++	onToggle: vi.fn(async () => undefined),
++	onToggleUseDotPad: vi.fn(),
++	onRegister: vi.fn(),
++});
++
++describe('CameraPointerControls', () => {
++	it('works without a DOT Pad: toggle and status only while off', async () => {
++		const props = makeProps();
++		render(<CameraPointerControls {...props} />);
++
++		const toggle = screen.getByRole('menuitemcheckbox', {
++			name: labels.toggle,
++		});
++		expect(toggle).toHaveAttribute('aria-checked', 'false');
++		expect(
++			screen.queryByRole('menuitemcheckbox', { name: labels.useDotPad }),
++		).not.toBeInTheDocument();
++		expect(
++			screen.queryByRole('menuitem', { name: labels.register }),
++		).not.toBeInTheDocument();
++		expect(screen.getByRole('status')).toHaveTextContent('Off');
++
++		fireEvent.click(toggle);
++		await waitFor(() => expect(props.onToggle).toHaveBeenCalledTimes(1));
++	});
++
++	it('offers registration while on', () => {
++		const props = { ...makeProps(), on: true, statusLabel: 'Tracking' };
++		render(<CameraPointerControls {...props} />);
++
++		expect(
++			screen.getByRole('menuitemcheckbox', { name: labels.toggle }),
++		).toHaveAttribute('aria-checked', 'true');
++		fireEvent.click(screen.getByRole('menuitem', { name: labels.register }));
++		expect(props.onRegister).toHaveBeenCalledTimes(1);
++		expect(screen.getByRole('status')).toHaveTextContent('Tracking');
++	});
++
++	it('offers the DOT Pad choice only while one is connected', () => {
++		const props = { ...makeProps(), dotPadConnected: true, useDotPad: false };
++		const { rerender } = render(<CameraPointerControls {...props} />);
++
++		const useDotPad = screen.getByRole('menuitemcheckbox', {
++			name: labels.useDotPad,
++		});
++		expect(useDotPad).toHaveAttribute('aria-checked', 'false');
++		fireEvent.click(useDotPad);
++		expect(props.onToggleUseDotPad).toHaveBeenCalledTimes(1);
++
++		rerender(<CameraPointerControls {...props} useDotPad />);
++		expect(
++			screen.getByRole('menuitemcheckbox', { name: labels.useDotPad }),
++		).toHaveAttribute('aria-checked', 'true');
++	});
++
++	it('keeps its actions in the menu arrow-key focus loop', () => {
++		render(
++			<div role="menu">
++				<CameraPointerControls {...makeProps()} on dotPadConnected />
++			</div>,
++		);
++		const toggle = screen.getByRole('menuitemcheckbox', {
++			name: labels.toggle,
++		});
++		const useDotPad = screen.getByRole('menuitemcheckbox', {
++			name: labels.useDotPad,
++		});
++		const register = screen.getByRole('menuitem', { name: labels.register });
++
++		toggle.focus();
++		fireEvent.keyDown(toggle, { key: 'ArrowDown' });
++		expect(useDotPad).toHaveFocus();
++		fireEvent.keyDown(useDotPad, { key: 'ArrowDown' });
++		expect(register).toHaveFocus();
++		fireEvent.keyDown(register, { key: 'ArrowDown' });
++		expect(toggle).toHaveFocus();
++	});
++});
