@@ -6,7 +6,6 @@ import {
 } from '../lib/dotpadSync';
 import { createPinQuantizer, createSendGate, PRESETS, DEFAULT_PRESET, pinKey } from '../lib/dotpadPins';
 import { matchL0 } from '../lib/l0';
-import { speak as defaultSpeak } from '../lib/speak';
 
 /** Pointing while not synced prompts at most this often (§5). */
 const UNSYNCED_PROMPT_MS = 10000;
@@ -39,7 +38,8 @@ function tick() {
  *   - the viewport tracker (`lib/dotpadViewport.js`) fed by `positionChanged`;
  *   - the pin quantizer and send gate (`lib/dotpadPins.js`);
  *   - the sync runner (`lib/dotpadSync.js`) and the STALE-only auto-resync timer;
- *   - the host's short spoken prompts.
+ *   - the host's short status prompts, handed to `announce` (screen-reader
+ *     live-region text on audiom.html — the page itself never speaks).
  *
  * Finger sends happen only while SYNCED, only for inner-band pins; the 2-pin
  * border band is silent apart from a soft tick on entry (decision 3). The
@@ -50,9 +50,11 @@ function tick() {
  *
  * @param {object} options
  * @param {object|null} options.channel `createAudiomChannel` instance (from AudiomMap's onChannel).
- * @param {(text: string) => unknown} [options.speak]
+ * @param {(text: string) => unknown} [options.announce] Where the prompts go —
+ *   AudiomTactileApp passes its live-region announcer (hooks/useAnnouncer.js).
+ *   Default: dropped.
  */
-export function useDotpadBridge({ channel, speak = defaultSpeak }) {
+export function useDotpadBridge({ channel, announce = () => {} }) {
   const trackerRef = useRef(null);
   if (!trackerRef.current) trackerRef.current = createViewportTracker();
   const quantRef = useRef(null);
@@ -62,8 +64,8 @@ export function useDotpadBridge({ channel, speak = defaultSpeak }) {
 
   const channelRef = useRef(channel);
   useEffect(() => { channelRef.current = channel; }, [channel]);
-  const speakRef = useRef(speak);
-  useEffect(() => { speakRef.current = speak; }, [speak]);
+  const announceRef = useRef(announce);
+  useEffect(() => { announceRef.current = announce; }, [announce]);
 
   const [syncState, setSyncState] = useState('unsynced');
   const [model, setModel] = useState(null);
@@ -105,13 +107,13 @@ export function useDotpadBridge({ channel, speak = defaultSpeak }) {
    */
   const requestSync = useCallback(async ({ auto = false } = {}) => {
     const ch = channelRef.current;
-    if (!ch) { speakRef.current('Load a map first.'); return null; }
+    if (!ch) { announceRef.current('Load a map first.'); return null; }
     if (syncingRef.current) return null;
     syncingRef.current = true;
     scheduler.cancel();
     gateRef.current.lift();
     setLastFailure(null);
-    speakRef.current(auto ? 'Re-syncing the DOT Pad. Hands off the keys.' : 'Syncing the DOT Pad. Hands off the keys.');
+    announceRef.current(auto ? 'Re-syncing the DOT Pad. Hands off the keys.' : 'Syncing the DOT Pad. Hands off the keys.');
     setSyncState('syncing');
     let res;
     try {
@@ -122,10 +124,10 @@ export function useDotpadBridge({ channel, speak = defaultSpeak }) {
     setPhase(null);
     if (res.ok) {
       const scale = describeScale(res.metresPerPin);
-      speakRef.current(`DOT Pad synced.${scale ? ` One pin is about ${scale.text}.` : ''}`);
+      announceRef.current(`DOT Pad synced.${scale ? ` One pin is about ${scale.text}.` : ''}`);
     } else {
       setLastFailure(res.reason);
-      speakRef.current(SYNC_FAILURE_TEXT[res.reason] || 'DOT Pad sync failed.');
+      announceRef.current(SYNC_FAILURE_TEXT[res.reason] || 'DOT Pad sync failed.');
     }
     refresh();
     // Console handle for live debugging: the last result and the tracker.
@@ -142,7 +144,7 @@ export function useDotpadBridge({ channel, speak = defaultSpeak }) {
       const r = t.observe(L);
       if (r.kind === 'ignored') return;
       if (r.becameStale) {
-        speakRef.current(autoResyncRef.current
+        announceRef.current(autoResyncRef.current
           ? 'DOT Pad scale changed — re-syncing.'
           : 'DOT Pad scale changed — press S to sync.');
       }
@@ -156,7 +158,7 @@ export function useDotpadBridge({ channel, speak = defaultSpeak }) {
       t.invalidate('ready');
       gateRef.current.lift();
       refresh();
-      speakRef.current("Map loaded. Connect the DOT Pad in Audiom's display options, then press S to sync.");
+      announceRef.current("Map loaded. Connect the DOT Pad in Audiom's display options, then press S to sync.");
     });
     if (typeof window !== 'undefined') window.dotpadTracker = t;
     return () => { offPosition(); offMessage(); scheduler.cancel(); };
@@ -192,7 +194,7 @@ export function useDotpadBridge({ channel, speak = defaultSpeak }) {
     if (t.state !== 'synced') {
       if (t.state !== 'syncing' && now - lastPromptRef.current > UNSYNCED_PROMPT_MS) {
         lastPromptRef.current = now;
-        speakRef.current('DOT Pad not synced — press S.');
+        announceRef.current('DOT Pad not synced — press S.');
       }
       g.offer(null, now);
       return;

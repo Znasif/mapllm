@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import cv from '@techstark/opencv-js';
 import { openCameraStream } from './cameraDevices';
 import { createPointingTracker, pointingHint } from './gestureRecognizer';
-import { speak } from './lib/speak';
 import { createCornerCapture, CORNER_PROMPTS } from './lib/cornerRegistration';
 import {
   DOTPAD_TEMPLATE, applyH, checkPinQuad, homography4, maskPolygons, orderQuad, resolveConfirmTouch, selectDevice,
@@ -61,8 +60,9 @@ function makeOneEuroFilter(minCutoff = 1.0, beta = 0.007, dCutoff = 1.0) {
 }
 
 // ---- accessibility cues ----
-// `speak` moved to lib/speak.js in milestone 5c — same cancel-then-speak
-// behaviour, now shared with AudiomMap's whats_here. The M-S queue replaces it.
+// Prompts go to the host's `announce` (audiom.html: an ARIA live region — the
+// page never speaks; the Audiom map does the talking). The corner-lock beep
+// stays: it is a sound cue, not an instruction.
 let _ac;
 const beep = () => {
   try {
@@ -73,6 +73,8 @@ const beep = () => {
     g.gain.exponentialRampToValueAtTime(0.001, _ac.currentTime + 0.15); o.stop(_ac.currentTime + 0.16);
   } catch { /* noop */ }
 };
+
+const NO_ANNOUNCE = () => {};
 
 const cornerPrompt = (name) => `Point at the ${name} corner pin of the DOT Pad and hold.`;
 
@@ -112,11 +114,16 @@ const cornerPrompt = (name) => `Point at the ${name} corner pin of the DOT Pad a
  *  - leadingControls        rendered first in the on-map control strip — the
  *                           host puts Sync there so it is the first focusable
  *                           element after the iframe (R9).
+ *  - announce(text)         where the prompts go (the host's live region).
+ *                           Default: dropped.
  */
 export function TactileExplorerGeneric({
   onUv, avatarPin = null, fingerPin = null, pagesLabel = '', showRectPanel = true,
-  actionsRef, onRegistrationChange, leadingControls = null,
+  actionsRef, onRegistrationChange, leadingControls = null, announce = NO_ANNOUNCE,
 }) {
+  const announceRef = useRef(announce);
+  useEffect(() => { announceRef.current = announce; }, [announce]);
+  const say = (text) => announceRef.current?.(text);
   const videoRef = useRef(null);
   const offRef = useRef(document.createElement('canvas')); // clean frame for AKAZE
   const debugRef = useRef(null);
@@ -216,7 +223,7 @@ export function TactileExplorerGeneric({
     clearTracking();
     setPhase('capturing');
     setStatus('Registering DOT Pad corners');
-    speak(cornerPrompt(CORNER_PROMPTS[0]));
+    say(cornerPrompt(CORNER_PROMPTS[0]));
   };
 
   const startAutoFind = () => {
@@ -227,7 +234,7 @@ export function TactileExplorerGeneric({
     };
     setPhase('autofind');
     setStatus('Auto-find: hands off the pad');
-    speak('Take your hands off the DOT Pad.');
+    say('Take your hands off the DOT Pad.');
   };
 
   const toggleFixed = () => {
@@ -393,7 +400,7 @@ export function TactileExplorerGeneric({
       handsOffRef.current = null;
       setPhase('ready');
       setStatus('Tracking');
-      speak('DOT Pad registered. Point at the pins.');
+      say('DOT Pad registered. Point at the pins.');
     }
 
     /** Hands are off: start scanning frames for the pin lattice. */
@@ -470,7 +477,7 @@ export function TactileExplorerGeneric({
       if (!found) {
         setPhase('idle');
         setStatus('DOT Pad not found — press R to register by corners');
-        speak("I couldn't find the DOT Pad. Press R to register it by its corners.");
+        say("I couldn't find the DOT Pad. Press R to register it by its corners.");
         return;
       }
       if (found.needsConfirm) {
@@ -480,7 +487,7 @@ export function TactileExplorerGeneric({
         setStatus(via === 'pins'
           ? 'Found the pins, but not which way up (text line not seen) — touch the top-left pin'
           : 'Found the outline only (pins not detected) — touch the top-left pin');
-        speak('Found the DOT Pad. Touch the top-left pin and hold.');
+        say('Found the DOT Pad. Touch the top-left pin and hold.');
         return;
       }
       // Text window seen: orientation is settled and the hands are already off.
@@ -605,13 +612,13 @@ export function TactileExplorerGeneric({
       }
       st.wasPointing = gesture.pointing;
 
-      // Speak only on transitions, and only the ambiguous case — announcing
+      // Announce only on transitions, and only the ambiguous case — announcing
       // every dropped frame would be unusable.
       const hint = pointingHint(gesture);
       if (hint !== st.lastHint) {
         st.lastHint = hint;
         setGestureHint(hint);
-        if (gesture.tooManyHandsPointing) speak('Point with only one hand.');
+        if (gesture.tooManyHandsPointing) say('Point with only one hand.');
       }
 
       const ph = phaseRef.current;
@@ -626,13 +633,13 @@ export function TactileExplorerGeneric({
             if (!check.ok) {
               captureRef.current.reset();
               setStatus(`Corners rejected (${check.reason}) — again`);
-              speak(`Those corners don't look like the pin area — let's try again. ${cornerPrompt(CORNER_PROMPTS[0])}`);
+              say(`Those corners don't look like the pin area — let's try again. ${cornerPrompt(CORNER_PROMPTS[0])}`);
             } else {
               beginHandsOff(cap.corners.map((p) => [...p]), now);
-              speak('Registered. Lift your hand for a moment.');
+              say('Registered. Lift your hand for a moment.');
             }
           } else {
-            speak(cornerPrompt(cap.nextPrompt));
+            say(cornerPrompt(cap.nextPrompt));
           }
         }
         if (st.lastUv !== null) emitUv(null);
@@ -663,11 +670,11 @@ export function TactileExplorerGeneric({
           beep();
           const resolved = resolveConfirmTouch(pendingRef.current, cap.corners[0]);
           if (!resolved) {
-            speak("That wasn't near a corner pin. Let's register by the corners instead.");
+            say("That wasn't near a corner pin. Let's register by the corners instead.");
             startCapture();
           } else {
             beginHandsOff(resolved, now);
-            speak('Confirmed. Lift your hand for a moment.');
+            say('Confirmed. Lift your hand for a moment.');
           }
         }
         if (st.lastUv !== null) emitUv(null);
@@ -822,7 +829,7 @@ export function TactileExplorerGeneric({
         captureReference(res.corners, frame);
         const fixed = isFixedRef.current; // captureReference leaves Fix alone — say so
         setStatus(fixed ? 'Tracking (Fixed) — DOT Pad moved, re-registered' : 'Tracking — DOT Pad moved, re-registered');
-        if (res.announce) speak('DOT Pad moved — re-registered.');
+        if (res.announce) say('DOT Pad moved — re-registered.');
         console.info('[TactileExplorerGeneric] drift watchdog: DOT Pad moved — re-registered', {
           disagreementPins: pins, maxPx: +res.cmp.maxPx.toFixed(1), pitchPx: +res.cmp.pitchPx.toFixed(2),
           textFound: det.textFound, orientationFromText: res.cmp.textOverride, fixed,

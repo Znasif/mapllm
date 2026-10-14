@@ -80,6 +80,11 @@ jobs:
           # DOM no matter what. Use a domain-restricted embed key.
           VITE_AUDIOM_KEY: ${{ secrets.VITE_AUDIOM_KEY }}
           VITE_AUDIOM_EMBED_URL: ${{ secrets.VITE_AUDIOM_EMBED_URL }}
+          # HARD-CODE: embed the user's copy of the Wisconsin map on STAGING and
+          # open it on load. VITE_AUDIOM_ORIGIN overrides the embed URL's host.
+          # Delete both lines to go back to audiom.net and a blank start.
+          VITE_AUDIOM_ORIGIN: https://audiom-staging.herokuapp.com
+          VITE_AUDIOM_DEFAULT_MAP: '885'
           # Build only audiom.html — index.html and the local-LLM stack behind it
           # are not published. See the input switch in starter/vite.config.js.
           VITE_PAGES_ENTRY: audiom

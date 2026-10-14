@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { parseAudiomId, parseAudiomSources, parseAudiomView, viewForPlace, PREDEFINED_SOURCES } from './audiom';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { parseAudiomId, parseAudiomSources, parseAudiomView, viewForPlace, PREDEFINED_SOURCES, AUDIOM_DEFAULT_MAP } from './audiom';
 import { forwardLookup, featureToPoint, featureToLabel, featureToBbox } from './lib/geocoding';
 import { AudiomMap } from './AudiomMap';
 import { TactileExplorerGeneric } from './TactileExplorerGeneric';
 import { SliderField } from './components/SliderField';
 import { useDotpadBridge } from './hooks/useDotpadBridge';
+import { useAnnouncer } from './hooks/useAnnouncer';
 import { PRESETS } from './lib/dotpadPins';
 import { speak } from './lib/speak';
 import asset from './lib/assetUrl';
@@ -21,13 +22,31 @@ import asset from './lib/assetUrl';
  * discovery, window fraction/pan, print aspect, the map overlay). Bounds
  * discovery in particular is gone on purpose: ~90 avatar moves would each be
  * pushed through the pad as a frame. `AudiomProbePanel.jsx` is left unused.
+ *
+ * This page never speaks: the Audiom map it embeds does the talking. The
+ * page's own status and instructions (sync, corner prompts, geocoding, camera
+ * errors) go through ONE `announce` (hooks/useAnnouncer.js) into the live
+ * regions at the top of the sidebar, for the user's screen reader and for a
+ * sighted helper. (The hidden mic path below still speaks; it is not shown.)
  */
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim();
 
+// ?pointer=camio swaps the camera pointer for the camio-pointer library
+// (CamioPointerPanel, a lazy chunk; same props). Default: TactileExplorerGeneric.
+const CamioPointerPanel = lazy(() => import('./CamioPointerPanel').then((m) => ({ default: m.CamioPointerPanel })));
+const PointerPanel = new URLSearchParams(window.location.search).get('pointer') === 'camio'
+  ? CamioPointerPanel
+  : TactileExplorerGeneric;
+
+// HARD-CODE (Pages): open a map on load — `?map=<id|link>` first, else the
+// build-time VITE_AUDIOM_DEFAULT_MAP (see audiom.js). The Load field still works.
+const INITIAL_MAP = new URLSearchParams(window.location.search).get('map') || AUDIOM_DEFAULT_MAP;
+const INITIAL_MAP_ID = parseAudiomId(INITIAL_MAP) || '';
+
 export default function AudiomTactileApp() {
-  const [sourceInput, setSourceInput] = useState('/maps/885');
+  const [sourceInput, setSourceInput] = useState(INITIAL_MAP || '/maps/885');
   const [sources, setSources] = useState('');
-  const [mapId, setMapId] = useState('');
+  const [mapId, setMapId] = useState(INITIAL_MAP_ID);
   const [view, setView] = useState(null); // { centerLng, centerLat, zoom?, anchors?, extent? }
   const [place, setPlace] = useState('');  // geocoded label when the field held an address
   const [searching, setSearching] = useState(false);
@@ -37,8 +56,9 @@ export default function AudiomTactileApp() {
   const [showRectPanel, setShowRectPanel] = useState(true);
   const [registration, setRegistration] = useState({ phase: 'idle', isFixed: false });
   const actionsRef = useRef(null);
+  const { polite: announcement, assertive: alertText, announce } = useAnnouncer();
 
-  const bridge = useDotpadBridge({ channel });
+  const bridge = useDotpadBridge({ channel, announce });
   const { requestSync } = bridge;
 
   // Stable identity: AudiomMap re-invokes onChannel whenever it changes.
@@ -90,14 +110,14 @@ export default function AudiomTactileApp() {
         const point = featureToPoint(feature);
         if (!point) {
           setError(`No place found for “${raw}”.`);
-          speak(`No place found for ${raw}.`);
+          announce(`No place found for ${raw}.`);
           return;
         }
         const label = featureToLabel(feature) || raw;
         setPlace(label);
         setView(viewForPlace(point, featureToBbox(feature)));
         setSources('osm');
-        speak(`Loading the map around ${label}.`);
+        announce(`Loading the map around ${label}.`);
       } catch (e) {
         if (e?.name !== 'AbortError') setError(`Address search failed: ${e.message}`);
       } finally {
@@ -152,6 +172,19 @@ export default function AudiomTactileApp() {
           </a>
         </header>
 
+        {/* The page's only live regions (see the header comment): the
+            announcer clears then sets the text, so a repeated prompt is read
+            again. Always rendered — a live region added with its text is not. */}
+        <section className="panel-section compact">
+          <p className="point-meta" role="status" aria-live="polite" aria-atomic="true"
+            style={{ fontSize: '0.95rem', margin: 0, minHeight: '1.3em' }}>
+            {announcement}
+          </p>
+          <p className="error-text" role="alert" aria-live="assertive" aria-atomic="true" style={{ margin: 0 }}>
+            {alertText}
+          </p>
+        </section>
+
         <section className="panel-section">
           <h2>Map</h2>
           <div className="geocoder">
@@ -178,7 +211,7 @@ export default function AudiomTactileApp() {
           <button type="button" className="primary-button" onClick={load} disabled={searching}>
             {searching ? 'Finding place…' : 'Load'}
           </button>
-          {place ? <p className="point-meta" aria-live="polite">place: {place} · {view?.extent === 'bbox' ? 'whole area' : 'about 360 m around it'}</p> : null}
+          {place ? <p className="point-meta">place: {place} · {view?.extent === 'bbox' ? 'whole area' : 'about 360 m around it'}</p> : null}
           {mapId ? <p className="point-meta">map id {mapId} · /embed/{mapId}</p> : null}
           {!mapId && sources ? <p className="point-meta">source: {sources}</p> : null}
           {error ? <p className="error-text">{error}</p> : null}
@@ -186,7 +219,7 @@ export default function AudiomTactileApp() {
 
         <section className="panel-section">
           <h2>DOT Pad</h2>
-          <p className="point-meta" aria-live="polite" role="status" style={{ fontSize: '0.95rem' }}>
+          <p className="point-meta" style={{ fontSize: '0.95rem' }}>
             {bridge.statusText}
           </p>
           <p className="point-meta">
@@ -264,16 +297,19 @@ export default function AudiomTactileApp() {
               onChannel={handleChannel}
               onUtterance={handleUtterance}
             />
-            <TactileExplorerGeneric
-              onUv={bridge.onUv}
-              avatarPin={bridge.avatarPin}
-              fingerPin={bridge.fingerPin}
-              pagesLabel={pagesLabel}
-              showRectPanel={showRectPanel}
-              actionsRef={actionsRef}
-              onRegistrationChange={handleRegistration}
-              leadingControls={syncButton}
-            />
+            <Suspense fallback={null}>
+              <PointerPanel
+                onUv={bridge.onUv}
+                avatarPin={bridge.avatarPin}
+                fingerPin={bridge.fingerPin}
+                pagesLabel={pagesLabel}
+                showRectPanel={showRectPanel}
+                actionsRef={actionsRef}
+                onRegistrationChange={handleRegistration}
+                leadingControls={syncButton}
+                announce={announce}
+              />
+            </Suspense>
           </>
         ) : (
           <div className="map-placeholder">

@@ -53,6 +53,12 @@ export const AUDIOM_KEY =
   envValue(() => import.meta.env.VITE_AUDIOM_FULL_ACCESS_KEY) ||
   envValue(() => import.meta.env.VITE_AUDIOM_KEY);
 
+// HARD-CODED DEFAULT MAP (Pages): when set, audiom.html opens this map on load
+// with no Load click. Anything `parseAudiomId` accepts: "885", "/maps/885", a
+// slug URL. Its host is ignored — the embed host is AUDIOM_ORIGIN, so pair it
+// with VITE_AUDIOM_ORIGIN when the map lives on staging. Empty = old behaviour.
+export const AUDIOM_DEFAULT_MAP = envValue(() => import.meta.env.VITE_AUDIOM_DEFAULT_MAP);
+
 // ---- 1. parse a map id from a pasted Audiom URL or bare id ----
 //
 // ⚠️ THE `/d/` ROUTE IS GONE. Verified by HTTP 2026-08-13 on BOTH hosts:
