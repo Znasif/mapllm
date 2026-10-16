@@ -11,5 +11,4 @@ cp dist/CamioPointer-<version>.js dist/CamioPointer-<version>.d.ts ../starter/sr
 ```
 
 and update the import in `starter/src/CamioPointerPanel.jsx` if the version changed.
-Used only by `CamioPointerPanel.jsx` (`audiom.html?pointer=camio`), lazy-loaded, and by
-`src/lib/sheetOverlay.js` (its camera overlay; `applyH`, `invert3`) in the same chunk.
+Used only by `CamioPointerPanel.jsx` (`audiom.html?pointer=camio`), lazy-loaded.

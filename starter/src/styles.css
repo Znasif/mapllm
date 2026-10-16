@@ -1153,95 +1153,10 @@ code {
   }
 }
 
-/* audiom.html: the camera over the whole Audiom map (CamioSheetOverlay.jsx).
-   Positioned over the iframe by the component (it measures .audiom-frame);
-   above the embed (z 5). pointer-events:none so Audiom underneath stays fully
-   usable — clicks, its own buttons, the keyboard. Visual only (aria-hidden). */
-.app-shell--audiom .camio-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.app-shell--audiom .camio-overlay[hidden] {
+/* Camera-preview show/hide toggle: small screens only (below). On desktop the
+   preview stays the bottom-left overlay and is always shown. */
+.camio-preview-toggle {
   display: none;
-}
-
-.app-shell--audiom .camio-overlay canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-/* Before / while registering: the live frame, letterboxed so all four corners
-   of the sheet stay in view. */
-.app-shell--audiom .camio-overlay-live {
-  object-fit: contain;
-  opacity: 0.85;
-  background: rgba(15, 23, 42, 0.55);
-}
-
-/* Registered: the rectified sheet, faint, with the marks at full opacity. */
-.app-shell--audiom .camio-overlay-sheet {
-  opacity: 0.4;
-}
-
-.app-shell--audiom .camio-overlay--live .camio-overlay-sheet,
-.app-shell--audiom .camio-overlay--live .camio-overlay-marks,
-.app-shell--audiom .camio-overlay--sheet .camio-overlay-live {
-  display: none;
-}
-
-.app-shell--audiom .camio-overlay-legend {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 12px;
-  max-width: calc(100% - 16px);
-  padding: 5px 10px;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.85);
-  color: #f8fafc;
-  font-size: 12px;
-  line-height: 1.3;
-}
-
-.app-shell--audiom .camio-overlay-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.app-shell--audiom .camio-overlay-note {
-  color: #cbd5e1;
-}
-
-.app-shell--audiom .camio-key {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  box-sizing: border-box;
-}
-
-.app-shell--audiom .camio-key--finger {
-  border: 3px solid #facc15;
-}
-
-.app-shell--audiom .camio-key--avatar {
-  background: #2563eb;
-  border: 2px solid #ffffff;
-}
-
-.app-shell--audiom .camera-toggle[aria-expanded='true'] {
-  background: #e2e8f0;
 }
 
 /* "Keys work while focus is outside the map" means nothing on a touch screen. */
@@ -1252,10 +1167,10 @@ code {
 }
 
 /* audiom.html on a phone or narrow window. The Audiom embed is the page's main
-   content, so it gets the full width and most of the height (the camera
-   overlay stays on top of it, as on desktop). The sidebar is flattened
-   (display: contents) so its sections and the map share one column: header,
-   status, Camera controls, map, How to use. */
+   content, so it gets the full width and most of the height, and the camera
+   preview moves out from on top of it into the flow below. The sidebar is
+   flattened (display: contents) so its sections and the map share one column:
+   header, status, Camera controls, map, camera preview, How to use. */
 @media (max-width: 980px) {
   .app-shell--audiom {
     display: flex;
@@ -1312,7 +1227,8 @@ code {
   }
 
   /* Touch-sized camera buttons */
-  .app-shell--audiom .camera-section button {
+  .app-shell--audiom .camera-section button,
+  .app-shell--audiom .camio-preview-toggle {
     min-height: 44px;
     padding: 10px 16px;
   }
@@ -1325,5 +1241,56 @@ code {
     height: 78vh;
     height: 78dvh;
     min-height: 320px;
+  }
+
+  /* Camera preview: below the map, never over it */
+  .app-shell--audiom .camio-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 16px;
+  }
+
+  .app-shell--audiom .camio-preview-toggle {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #ffffff;
+    color: #0f172a;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .app-shell--audiom .camio-preview-toggle[aria-expanded='true'] {
+    background: #e2e8f0;
+  }
+
+  .app-shell--audiom .tactile-debug-panel {
+    position: static;
+    width: auto;
+    max-width: 100%;
+    opacity: 1;
+    box-shadow: none;
+  }
+
+  .app-shell--audiom .tactile-debug-panel.is-collapsed {
+    display: none;
+  }
+
+  .app-shell--audiom .tactile-debug-header {
+    padding: 4px 8px;
+    font-size: 11px;
+    white-space: normal;
+  }
+
+  /* A phone camera frame is portrait: cap the height, keep the aspect. */
+  .app-shell--audiom .tactile-debug-canvas {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: 50vh;
+    max-height: 50dvh;
   }
 }

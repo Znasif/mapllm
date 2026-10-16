@@ -317,19 +317,6 @@ export function uvToLngLat(u, v, bbox) {
   return { lng, lat };
 }
 
-/**
- * The exact inverse of `uvToLngLat`: a map point → (u, v) in the same frame
- * (u linear in lng, v linear in Mercator-Y; 0 = left/top, 1 = right/bottom).
- * Not clamped: a point outside the bbox gives u or v outside [0, 1].
- */
-export function lngLatToUv(lng, lat, bbox) {
-  const [minLng, minLat, maxLng, maxLat] = bbox;
-  const u = (lng - minLng) / (maxLng - minLng);
-  const yTop = mercY(maxLat), yBot = mercY(minLat);
-  const v = (mercY(lat) - yTop) / (yBot - yTop);
-  return { u, v };
-}
-
 // Spatial diagram / ENU map: East/North metres only, interpolate LINEARLY.
 // enBox = { e0, n0, e1, n1 } from the map's announced dimensions.
 // NOTE: moveAvatar is lat/lng-only per the docs, so a pure diagram needs Audiom

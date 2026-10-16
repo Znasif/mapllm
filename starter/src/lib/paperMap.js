@@ -11,7 +11,7 @@
  * PLATFORM-FREE (no DOM, no import.meta.env) so it runs in Node:
  * `scripts/test_paper_map.mjs`.
  */
-import { lngLatToUv, uvToLngLat } from '../audiom.js';
+import { uvToLngLat } from '../audiom.js';
 
 /** The Audiom map the page embeds when VITE_AUDIOM_DEFAULT_MAP is not set. */
 export const PAPER_MAP_ID = '885';
@@ -65,22 +65,4 @@ export function pointToLngLat(point, bbox = MAP_885_BBOX) {
   if (!Number.isFinite(u) || !Number.isFinite(v)) return null;
   const { lng, lat } = uvToLngLat(u, v, bbox);
   return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
-}
-
-/**
- * The inverse of `pointToLngLat`: an avatar `[lng, lat]` (or `{ lng, lat }`)
- * → `{ u, v }` on the printed sheet (lngLatToUv in audiom.js), or null when not
- * finite. Not clamped: a position off the print gives u or v outside [0, 1].
- * The camera overlay draws Audiom's avatar on the rectified sheet with it.
- *
- * @param {number[]|{lng: number, lat: number}} position
- * @param {number[]} [bbox] defaults to MAP_885_BBOX
- * @returns {{u: number, v: number}|null}
- */
-export function lngLatToPoint(position, bbox = MAP_885_BBOX) {
-  const lng = Array.isArray(position) ? position[0] : position?.lng;
-  const lat = Array.isArray(position) ? position[1] : position?.lat;
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
-  const { u, v } = lngLatToUv(lng, lat, bbox);
-  return Number.isFinite(u) && Number.isFinite(v) ? { u, v } : null;
 }
