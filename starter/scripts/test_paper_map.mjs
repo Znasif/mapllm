@@ -11,9 +11,9 @@
  * well-formed.
  */
 
-import { uvToLngLat, mercY } from '../src/audiom.js';
+import { lngLatToUv, uvToLngLat, mercY } from '../src/audiom.js';
 import {
-  MAP_885_BBOX, PAPER_MAP_ID, bboxFromSearch, parseBboxParam, pointToLngLat,
+  MAP_885_BBOX, PAPER_MAP_ID, bboxFromSearch, lngLatToPoint, parseBboxParam, pointToLngLat,
 } from '../src/lib/paperMap.js';
 
 let failures = 0;
@@ -65,6 +65,32 @@ check(parseBboxParam('1,2,3') === null, 'three numbers rejected');
 check(parseBboxParam('-88,43,-90,45') === null, 'west ≥ east rejected');
 check(parseBboxParam('a,b,c,d') === null, 'non-numbers rejected');
 check(bboxFromSearch('?bbox=junk') === MAP_885_BBOX, 'malformed ?bbox= falls back to the constant');
+
+console.log('\n— lngLatToUv / lngLatToPoint: the exact inverse (camera overlay avatar)');
+for (const bbox of [MAP_885_BBOX, custom, [-180, -80, 180, 80]]) {
+  let worst = 0;
+  for (let i = 0; i <= 10; i += 1) {
+    for (let j = 0; j <= 10; j += 1) {
+      const u = i / 10, v = j / 10;
+      const { lng, lat } = uvToLngLat(u, v, bbox);
+      const back = lngLatToUv(lng, lat, bbox);
+      worst = Math.max(worst, Math.abs(back.u - u), Math.abs(back.v - v));
+    }
+  }
+  check(worst < 1e-9, `uv → lng/lat → uv round-trips on ${bbox.join(',')}`, `max err ${worst.toExponential(2)}`);
+}
+for (const [u, v, want, name] of corners) {
+  const q = lngLatToPoint(want);
+  check(!!q && near(q.u, u) && near(q.v, v), `lngLatToPoint ${name} corner`, q && `${q.u},${q.v}`);
+}
+const there = pointToLngLat({ u: 0.25, v: 0.7 });
+const backPt = lngLatToPoint({ lng: there[0], lat: there[1] });
+check(!!backPt && near(backPt.u, 0.25) && near(backPt.v, 0.7), 'lngLatToPoint accepts { lng, lat } and inverts pointToLngLat');
+const midLatLinear = lngLatToPoint([(W + E) / 2, (N + S) / 2]);
+check(midLatLinear.v > 0.5, 'the linear-mid latitude is below the sheet centre (Mercator)', `${midLatLinear.v}`);
+const off = lngLatToPoint([E + 1, N + 1]);
+check(off.u > 1 && off.v < 0, 'off-print positions are not clamped');
+check(lngLatToPoint(null) === null && lngLatToPoint([NaN, 1]) === null, 'non-finite input → null');
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -4,6 +4,7 @@ import { AudiomMap } from './AudiomMap';
 import { useAnnouncer } from './hooks/useAnnouncer';
 import { PAPER_MAP_ID, bboxFromSearch, pointToLngLat } from './lib/paperMap';
 import { speak } from './lib/speak';
+import { INBOUND, toPosition } from './lib/audiomChannel';
 
 /**
  * Audiom map 885 + a camera pointer for a printed copy of it.
@@ -17,6 +18,11 @@ import { speak } from './lib/speak';
  * status and prompts go through ONE `announce` (hooks/useAnnouncer.js) into the
  * live regions at the top of the sidebar. (The hidden mic path still speaks; it
  * is not shown.)
+ *
+ * The camera is drawn over the whole Audiom map (CamioSheetOverlay, visual
+ * only, click-through): the live frame until registration, then the rectified
+ * sheet with the fingertip and Audiom's avatar on it. "Hide camera" in the
+ * Camera section turns it off.
  */
 const CamioPointerPanel = lazy(() => import('./CamioPointerPanel').then((m) => ({ default: m.CamioPointerPanel })));
 
@@ -30,6 +36,26 @@ export default function AudiomTactileApp() {
   const actionsRef = useRef(null);
   const channelRef = useRef(null);
   useEffect(() => { channelRef.current = channel; }, [channel]);
+  const [showCamera, setShowCamera] = useState(true);
+
+  // Audiom's avatar [lng, lat] as the embed reports it (every move, ours or
+  // not), for the camera overlay. A ref: the overlay reads it per redraw.
+  const avatarRef = useRef(null);
+  useEffect(() => {
+    if (!channel) return undefined;
+    let live = true;
+    const offPos = channel.onPosition((pos) => { avatarRef.current = pos; });
+    const offState = channel.onMessage((type, payload) => {
+      if (type !== INBOUND.STATE_CHANGED) return;
+      const pos = toPosition(payload?.position);
+      if (pos) avatarRef.current = pos;
+    });
+    channel.getState().then((pos) => {
+      const p = toPosition(pos);
+      if (live && p && !avatarRef.current) avatarRef.current = p;
+    }).catch(() => {});
+    return () => { live = false; offPos(); offState(); };
+  }, [channel]);
   const { polite: announcement, assertive: alertText, announce } = useAnnouncer();
 
   // Stable identities: AudiomMap re-invokes onChannel whenever it changes.
@@ -58,7 +84,7 @@ export default function AudiomTactileApp() {
   const ready = camera.phase === 'ready';
 
   // ≤980px, styles.css flattens the sidebar (display: contents) and reorders:
-  // header, status, Camera, the map, the camera preview, then How to use.
+  // header, status, Camera, the map (with the camera overlay), then How to use.
   return (
     <div className="app-shell app-shell--audiom">
       <aside className="sidebar">
@@ -95,6 +121,15 @@ export default function AudiomTactileApp() {
             <button type="button" onClick={() => actionsRef.current?.toggleFixed()} disabled={!ready}>
               {camera.isFixed ? 'Unfix [;]' : 'Fix [;]'}
             </button>
+            <button
+              type="button"
+              className="camera-toggle"
+              aria-expanded={showCamera}
+              aria-controls="camio-overlay"
+              onClick={() => setShowCamera((v) => !v)}
+            >
+              {showCamera ? 'Hide camera' : 'Show camera'}
+            </button>
             {camera.cameraError && (
               <button type="button" onClick={() => actionsRef.current?.retry()}>Retry camera</button>
             )}
@@ -130,6 +165,9 @@ export default function AudiomTactileApp() {
             onStatus={handleStatus}
             actionsRef={actionsRef}
             announce={announce}
+            showCamera={showCamera}
+            bbox={BBOX}
+            avatarRef={avatarRef}
           />
         </Suspense>
       </main>
